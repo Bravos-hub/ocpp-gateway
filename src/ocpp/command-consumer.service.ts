@@ -5,6 +5,7 @@ import { KAFKA_TOPICS } from '../contracts/kafka-topics'
 import { CommandRequest } from '../contracts/commands'
 import { DomainEvent } from '../contracts/events'
 import { ConnectionManager } from './connection-manager.service'
+import { OcppCommandDispatcher } from './command-dispatcher.service'
 
 @Injectable()
 export class CommandConsumerService implements OnModuleInit, OnModuleDestroy {
@@ -12,7 +13,8 @@ export class CommandConsumerService implements OnModuleInit, OnModuleDestroy {
 
   constructor(
     private readonly kafka: KafkaService,
-    private readonly connections: ConnectionManager
+    private readonly connections: ConnectionManager,
+    private readonly dispatcher: OcppCommandDispatcher
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -39,12 +41,38 @@ export class CommandConsumerService implements OnModuleInit, OnModuleDestroy {
         }
 
         const connection = this.connections.getByChargePointId(chargePointId)
-        if (!connection) {
+        const meta = this.connections.getMetaByChargePointId(chargePointId)
+        if (!connection || !meta) {
           await this.publishCommandEvent(command, 'CommandFailed', 'Charge point offline')
           return
         }
 
+        const context = {
+          chargePointId,
+          ocppVersion: command.ocppVersion || meta.ocppVersion,
+        }
+
         await this.publishCommandEvent(command, 'CommandDispatched')
+        const result = await this.dispatcher.dispatch(command, context, connection)
+
+        if (result.status === 'accepted') {
+          await this.publishCommandEvent(command, 'CommandAccepted', undefined, result.payload)
+          return
+        }
+
+        if (result.status === 'timeout') {
+          await this.publishCommandEvent(command, 'CommandTimeout', 'No response from charge point')
+          return
+        }
+
+        if (result.status === 'error') {
+          const errorCodes = ['UnsupportedCommand', 'SchemaMissing', 'PayloadValidationFailed']
+          const eventType = errorCodes.includes(result.errorCode) ? 'CommandFailed' : 'CommandRejected'
+          await this.publishCommandEvent(command, eventType, result.errorDescription, {
+            errorCode: result.errorCode,
+            errorDetails: result.errorDetails,
+          })
+        }
       },
     })
   }
@@ -56,7 +84,8 @@ export class CommandConsumerService implements OnModuleInit, OnModuleDestroy {
   private async publishCommandEvent(
     command: CommandRequest,
     eventType: string,
-    error?: string
+    error?: string,
+    responsePayload?: unknown
   ): Promise<void> {
     const event: DomainEvent = {
       eventId: randomUUID(),
@@ -71,6 +100,7 @@ export class CommandConsumerService implements OnModuleInit, OnModuleDestroy {
       payload: {
         commandType: command.commandType,
         error,
+        response: responsePayload,
       },
     }
 

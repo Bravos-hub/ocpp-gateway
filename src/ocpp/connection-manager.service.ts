@@ -31,4 +31,10 @@ export class ConnectionManager {
   getByChargePointId(chargePointId: string): WebSocket | undefined {
     return this.byChargePointId.get(chargePointId)
   }
+
+  getMetaByChargePointId(chargePointId: string): ConnectionMeta | undefined {
+    const socket = this.byChargePointId.get(chargePointId)
+    if (!socket) return undefined
+    return this.byClient.get(socket)
+  }
 }

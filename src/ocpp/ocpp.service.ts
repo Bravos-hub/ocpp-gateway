@@ -1,5 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common'
 import { buildCallError, buildCallResult, parseEnvelope } from './ocpp-envelope'
+import { OcppResponseCache } from './response-cache.service'
+import { OcppRequestTracker } from './request-tracker.service'
 import { OcppSchemaValidator } from './schema-validator.service'
 import { OcppAdapter, OcppContext } from './versions/ocpp-adapter.interface'
 import { Ocpp16Adapter } from './versions/ocpp16.adapter'
@@ -15,7 +17,9 @@ export class OcppService {
     ocpp16: Ocpp16Adapter,
     ocpp201: Ocpp201Adapter,
     ocpp21: Ocpp21Adapter,
-    private readonly validator: OcppSchemaValidator
+    private readonly validator: OcppSchemaValidator,
+    private readonly responseCache: OcppResponseCache,
+    private readonly requestTracker: OcppRequestTracker
   ) {
     this.adapters = {
       '1.6J': ocpp16,
@@ -41,46 +45,70 @@ export class OcppService {
 
     const adapter = this.adapters[context.ocppVersion] || this.adapters['1.6J']
 
-    if (envelope.messageTypeId !== 2) {
-      this.logger.debug(`Ignoring non-call message ${envelope.messageTypeId}`)
+    if (envelope.messageTypeId === 3) {
+      this.requestTracker.handleCallResult(envelope.uniqueId, envelope.payload)
+      return null
+    }
+    if (envelope.messageTypeId === 4) {
+      this.requestTracker.handleCallError(
+        envelope.uniqueId,
+        envelope.errorCode,
+        envelope.errorDescription,
+        envelope.errorDetails
+      )
       return null
     }
 
+    // At this point only CALL messages remain.
+
+    const cached = this.responseCache.get(context, envelope.uniqueId)
+    if (cached) {
+      return cached
+    }
+
     if (!this.validator.hasSchema(context.ocppVersion, envelope.action)) {
-      return buildCallError(
+      const error = buildCallError(
         envelope.uniqueId,
         'NotImplemented',
         `Action ${envelope.action} not supported`,
         {}
       )
+      this.responseCache.set(context, envelope.uniqueId, error)
+      return error
     }
 
     const validation = this.validator.validate(context.ocppVersion, envelope.action, envelope.payload)
     if (!validation.valid) {
       const code = context.ocppVersion === '1.6J' ? 'FormationViolation' : 'FormatViolation'
-      return buildCallError(envelope.uniqueId, code, 'Payload validation failed', {
+      const error = buildCallError(envelope.uniqueId, code, 'Payload validation failed', {
         errors: validation.errors || [],
       })
+      this.responseCache.set(context, envelope.uniqueId, error)
+      return error
     }
 
     const result = await adapter.handleCall(envelope.action, envelope.payload, context)
 
     if (result.error) {
-      return buildCallError(
+      const error = buildCallError(
         envelope.uniqueId,
         result.error.code,
         result.error.description,
         result.error.details || {}
       )
+      this.responseCache.set(context, envelope.uniqueId, error)
+      return error
     }
 
     if (!this.validator.hasResponseSchema(context.ocppVersion, envelope.action)) {
-      return buildCallError(
+      const error = buildCallError(
         envelope.uniqueId,
         'InternalError',
         `No response schema for ${envelope.action}`,
         {}
       )
+      this.responseCache.set(context, envelope.uniqueId, error)
+      return error
     }
 
     const responsePayload = result.response || {}
@@ -91,11 +119,15 @@ export class OcppService {
     )
 
     if (!responseValidation.valid) {
-      return buildCallError(envelope.uniqueId, 'InternalError', 'Response validation failed', {
+      const error = buildCallError(envelope.uniqueId, 'InternalError', 'Response validation failed', {
         errors: responseValidation.errors || [],
       })
+      this.responseCache.set(context, envelope.uniqueId, error)
+      return error
     }
 
-    return buildCallResult(envelope.uniqueId, responsePayload)
+    const callResult = buildCallResult(envelope.uniqueId, responsePayload)
+    this.responseCache.set(context, envelope.uniqueId, callResult)
+    return callResult
   }
 }
