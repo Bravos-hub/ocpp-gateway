@@ -42,6 +42,20 @@ export class Ocpp21Adapter implements OcppAdapter {
         })
         return { response: {} }
       }
+      case 'SecurityEventNotification': {
+        await this.publisher.publishStationEvent('SecurityEventNotification', context, {
+          action,
+          payload,
+        })
+        return { response: {} }
+      }
+      case 'NotifyEvent': {
+        await this.publisher.publishStationEvent('NotifyEvent', context, {
+          action,
+          payload,
+        })
+        return { response: {} }
+      }
       case 'TransactionEvent': {
         await this.publisher.publishSessionEvent('SessionEvent', context, {
           action,
@@ -50,6 +64,31 @@ export class Ocpp21Adapter implements OcppAdapter {
         return {
           response: {
             idTokenInfo: { status: 'Accepted' },
+          },
+        }
+      }
+      case 'FirmwareStatusNotification': {
+        await this.publisher.publishStationEvent('FirmwareStatusNotification', context, {
+          action,
+          payload,
+        })
+        return { response: {} }
+      }
+      case 'LogStatusNotification': {
+        await this.publisher.publishStationEvent('LogStatusNotification', context, {
+          action,
+          payload,
+        })
+        return { response: {} }
+      }
+      case 'DataTransfer': {
+        await this.publisher.publishStationEvent('DataTransferReceived', context, {
+          action,
+          payload,
+        })
+        return {
+          response: {
+            status: 'Accepted',
           },
         }
       }
