@@ -55,6 +55,48 @@ export const OCPP2_SCHEMAS: Record<string, AnySchema> = {
     type: 'object',
     additionalProperties: true,
   },
+  SecurityEventNotification: {
+    type: 'object',
+    required: ['type', 'timestamp'],
+    properties: {
+      type: stringRequired,
+      timestamp: stringRequired,
+      techInfo: { type: 'string' },
+      severity: { type: 'string' },
+      component: { type: 'object' },
+      variable: { type: 'object' },
+      eventId: integerNonNeg,
+    },
+    additionalProperties: true,
+  },
+  NotifyEvent: {
+    type: 'object',
+    required: ['generatedAt', 'seqNo', 'eventData'],
+    properties: {
+      generatedAt: stringRequired,
+      seqNo: integerNonNeg,
+      eventData: {
+        type: 'array',
+        minItems: 1,
+        items: {
+          type: 'object',
+          required: ['eventId', 'timestamp', 'trigger'],
+          properties: {
+            eventId: integerNonNeg,
+            timestamp: stringRequired,
+            trigger: stringRequired,
+            actualValue: { type: 'string' },
+            cleared: { type: 'boolean' },
+            eventNotificationType: { type: 'string' },
+            component: { type: 'object' },
+            variable: { type: 'object' },
+          },
+          additionalProperties: true,
+        },
+      },
+    },
+    additionalProperties: true,
+  },
   StatusNotification: {
     type: 'object',
     required: ['timestamp', 'connectorStatus', 'evseId'],

@@ -74,6 +74,28 @@ export class OcppService {
       )
     }
 
-    return buildCallResult(envelope.uniqueId, result.response || {})
+    if (!this.validator.hasResponseSchema(context.ocppVersion, envelope.action)) {
+      return buildCallError(
+        envelope.uniqueId,
+        'InternalError',
+        `No response schema for ${envelope.action}`,
+        {}
+      )
+    }
+
+    const responsePayload = result.response || {}
+    const responseValidation = this.validator.validateResponse(
+      context.ocppVersion,
+      envelope.action,
+      responsePayload
+    )
+
+    if (!responseValidation.valid) {
+      return buildCallError(envelope.uniqueId, 'InternalError', 'Response validation failed', {
+        errors: responseValidation.errors || [],
+      })
+    }
+
+    return buildCallResult(envelope.uniqueId, responsePayload)
   }
 }

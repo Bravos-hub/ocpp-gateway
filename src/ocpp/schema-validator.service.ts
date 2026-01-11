@@ -1,14 +1,21 @@
 import Ajv, { type AnySchema, type ValidateFunction } from 'ajv'
 import { Injectable, Logger } from '@nestjs/common'
 import { OCPP16_SCHEMAS } from './schemas/ocpp16.schemas'
+import { OCPP16_RESPONSES } from './schemas/ocpp16.responses'
 import { OCPP2_SCHEMAS } from './schemas/ocpp2.schemas'
+import { OCPP2_RESPONSES } from './schemas/ocpp2.responses'
 
 type VersionKey = '1.6J' | '2.0.1' | '2.1'
 
 @Injectable()
 export class OcppSchemaValidator {
   private readonly logger = new Logger(OcppSchemaValidator.name)
-  private readonly validators: Record<VersionKey, Record<string, ValidateFunction>> = {
+  private readonly requestValidators: Record<VersionKey, Record<string, ValidateFunction>> = {
+    '1.6J': {},
+    '2.0.1': {},
+    '2.1': {},
+  }
+  private readonly responseValidators: Record<VersionKey, Record<string, ValidateFunction>> = {
     '1.6J': {},
     '2.0.1': {},
     '2.1': {},
@@ -16,24 +23,56 @@ export class OcppSchemaValidator {
 
   constructor() {
     const ajv = new Ajv({ allErrors: true, strict: true })
-    this.validators['1.6J'] = this.compileSchemas(ajv, OCPP16_SCHEMAS)
-    this.validators['2.0.1'] = this.compileSchemas(ajv, OCPP2_SCHEMAS)
-    this.validators['2.1'] = this.compileSchemas(ajv, OCPP2_SCHEMAS)
+    this.requestValidators['1.6J'] = this.compileSchemas(ajv, OCPP16_SCHEMAS)
+    this.requestValidators['2.0.1'] = this.compileSchemas(ajv, OCPP2_SCHEMAS)
+    this.requestValidators['2.1'] = this.compileSchemas(ajv, OCPP2_SCHEMAS)
+    this.responseValidators['1.6J'] = this.compileSchemas(ajv, OCPP16_RESPONSES)
+    this.responseValidators['2.0.1'] = this.compileSchemas(ajv, OCPP2_RESPONSES)
+    this.responseValidators['2.1'] = this.compileSchemas(ajv, OCPP2_RESPONSES)
   }
 
   hasSchema(version: string, action: string): boolean {
     const normalizedVersion = version === '1.6' ? '1.6J' : (version as VersionKey)
-    const versionValidators = this.validators[normalizedVersion] || this.validators['1.6J']
+    const versionValidators = this.requestValidators[normalizedVersion] || this.requestValidators['1.6J']
+    return Boolean(versionValidators[action])
+  }
+
+  hasResponseSchema(version: string, action: string): boolean {
+    const normalizedVersion = version === '1.6' ? '1.6J' : (version as VersionKey)
+    const versionValidators = this.responseValidators[normalizedVersion] || this.responseValidators['1.6J']
     return Boolean(versionValidators[action])
   }
 
   validate(version: string, action: string, payload: unknown): { valid: boolean; errors?: string[] } {
     const normalizedVersion = version === '1.6' ? '1.6J' : (version as VersionKey)
-    const versionValidators = this.validators[normalizedVersion] || this.validators['1.6J']
+    const versionValidators = this.requestValidators[normalizedVersion] || this.requestValidators['1.6J']
     const validator = versionValidators[action]
     if (!validator) {
       this.logger.debug(`No schema registered for ${normalizedVersion} ${action}`)
       return { valid: false, errors: ['schema_missing'] }
+    }
+
+    const valid = validator(payload)
+    if (valid) {
+      return { valid: true }
+    }
+
+    const errors = (validator.errors || []).map((error) => {
+      const path = error.instancePath || '/'
+      const message = error.message || 'invalid'
+      return `${path} ${message}`.trim()
+    })
+
+    return { valid: false, errors }
+  }
+
+  validateResponse(version: string, action: string, payload: unknown): { valid: boolean; errors?: string[] } {
+    const normalizedVersion = version === '1.6' ? '1.6J' : (version as VersionKey)
+    const versionValidators = this.responseValidators[normalizedVersion] || this.responseValidators['1.6J']
+    const validator = versionValidators[action]
+    if (!validator) {
+      this.logger.debug(`No response schema registered for ${normalizedVersion} ${action}`)
+      return { valid: false, errors: ['response_schema_missing'] }
     }
 
     const valid = validator(payload)

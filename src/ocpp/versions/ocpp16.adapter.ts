@@ -80,6 +80,31 @@ export class Ocpp16Adapter implements OcppAdapter {
         })
         return { response: {} }
       }
+      case 'DiagnosticsStatusNotification': {
+        await this.publisher.publishStationEvent('DiagnosticsStatusNotification', context, {
+          action,
+          payload,
+        })
+        return { response: {} }
+      }
+      case 'FirmwareStatusNotification': {
+        await this.publisher.publishStationEvent('FirmwareStatusNotification', context, {
+          action,
+          payload,
+        })
+        return { response: {} }
+      }
+      case 'DataTransfer': {
+        await this.publisher.publishStationEvent('DataTransferReceived', context, {
+          action,
+          payload,
+        })
+        return {
+          response: {
+            status: 'Accepted',
+          },
+        }
+      }
       default: {
         this.logger.debug(`Unsupported action ${action}`)
         return {
