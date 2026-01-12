@@ -29,6 +29,8 @@ export default () => ({
   auth: {
     mode: process.env.OCPP_AUTH_MODE || 'basic',
     identityPrefix: process.env.OCPP_IDENTITY_PREFIX || 'chargers',
+    revokedPrefix: process.env.OCPP_REVOKED_PREFIX || 'revoked-certs',
+    requireCertBinding: (process.env.OCPP_REQUIRE_CERT_BINDING ?? 'true') === 'true',
     allowPlaintextSecrets: (process.env.OCPP_ALLOW_PLAINTEXT_SECRETS ?? 'false') === 'true',
   },
 })

@@ -16,6 +16,7 @@ import { Ocpp201Adapter } from './versions/ocpp201.adapter'
 import { Ocpp21Adapter } from './versions/ocpp21.adapter'
 import { OcppSecurityGuard } from './guards/ocpp-security.guard'
 import { ChargerIdentityService } from './charger-identity.service'
+import { ChargerIdentityProvisioner } from './charger-identity-provisioner.service'
 
 @Module({
   imports: [KafkaModule, RedisModule],
@@ -35,6 +36,7 @@ import { ChargerIdentityService } from './charger-identity.service'
     Ocpp21Adapter,
     OcppSecurityGuard,
     ChargerIdentityService,
+    ChargerIdentityProvisioner,
   ],
 })
 export class OcppModule {}

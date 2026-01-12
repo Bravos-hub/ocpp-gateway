@@ -7,7 +7,9 @@
     "start:dev": "nest start --watch",
     "build": "nest build",
     "lint": "eslint \"{src,test}/**/*.ts\"",
-    "smoke:ocpp": "ts-node scripts/ocpp-smoke.ts"
+    "smoke:ocpp": "ts-node scripts/ocpp-smoke.ts",
+    "provision:charger": "ts-node scripts/provision-charger.ts",
+    "revoke:cert": "ts-node scripts/revoke-cert.ts"
   },
   "dependencies": {
     "@nestjs/common": "^10.3.0",

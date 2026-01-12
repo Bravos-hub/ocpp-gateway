@@ -6,6 +6,14 @@ import { RedisService } from '../redis/redis.service'
 
 export type ChargerIdentityAuthType = 'basic' | 'token' | 'mtls'
 
+type ExtractedCertInfo = {
+  fingerprint: string
+  subject: string
+  serialNumber: string
+  altNames: string[]
+  expired?: boolean
+}
+
 export type ChargerIdentityAuth = {
   type?: ChargerIdentityAuthType
   username?: string
@@ -16,6 +24,19 @@ export type ChargerIdentityAuth = {
   token?: string
   subject?: string
   fingerprint?: string
+  certificates?: ChargerCertificateBinding[]
+  revokedFingerprints?: string[]
+}
+
+export type ChargerCertificateBinding = {
+  fingerprint?: string
+  subject?: string
+  subjectAltName?: string
+  serialNumber?: string
+  validFrom?: string
+  validTo?: string
+  status?: 'active' | 'revoked'
+  chargePointId?: string
 }
 
 export type ChargerIdentity = {
@@ -31,6 +52,8 @@ export type ChargerIdentity = {
 export class ChargerIdentityService {
   private readonly logger = new Logger(ChargerIdentityService.name)
   private readonly keyPrefix: string
+  private readonly revokedPrefix: string
+  private readonly requireExplicitCertBinding: boolean
   private readonly defaultAuthMode: ChargerIdentityAuthType
   private readonly allowPlaintextSecrets: boolean
 
@@ -39,6 +62,8 @@ export class ChargerIdentityService {
     private readonly config: ConfigService
   ) {
     this.keyPrefix = this.config.get<string>('auth.identityPrefix') || 'chargers'
+    this.revokedPrefix = this.config.get<string>('auth.revokedPrefix') || 'revoked-certs'
+    this.requireExplicitCertBinding = this.config.get<boolean>('auth.requireCertBinding') ?? true
     this.defaultAuthMode = (this.config.get<string>('auth.mode') || 'basic') as ChargerIdentityAuthType
     this.allowPlaintextSecrets = this.config.get<boolean>('auth.allowPlaintextSecrets') ?? false
   }
@@ -59,7 +84,8 @@ export class ChargerIdentityService {
 
     if (identity.allowedProtocols && identity.allowedProtocols.length > 0) {
       const allowed = identity.allowedProtocols.map((version) => version.toUpperCase())
-      if (!allowed.includes(ocppVersion.toUpperCase())) {
+      const normalized = this.normalizeVersion(ocppVersion).toUpperCase()
+      if (!allowed.includes(normalized)) {
         return null
       }
     }
@@ -71,7 +97,7 @@ export class ChargerIdentityService {
       case 'token':
         return this.verifyToken(request, identity) ? identity : null
       case 'mtls':
-        return this.verifyMtls(request, identity) ? identity : null
+        return (await this.verifyMtls(request, identity)) ? identity : null
       default:
         return null
     }
@@ -137,31 +163,42 @@ export class ChargerIdentityService {
     return this.verifyTokenValue(token, identity)
   }
 
-  private verifyMtls(request: IncomingMessage, identity: ChargerIdentity): boolean {
+  private async verifyMtls(request: IncomingMessage, identity: ChargerIdentity): Promise<boolean> {
     const socket: any = request.socket
     if (!socket || typeof socket.getPeerCertificate !== 'function') {
       return false
     }
 
-    if (!socket.authorized) {
+    if (!socket.encrypted || !socket.authorized) {
       return false
     }
 
-    const cert = socket.getPeerCertificate()
+    const cert = socket.getPeerCertificate(true)
     if (!cert) return false
 
-    if (identity.auth?.subject && cert.subject?.CN !== identity.auth.subject) {
+    const certInfo = this.extractCertInfo(cert)
+    if (!certInfo.fingerprint) {
+      return false
+    }
+    if (certInfo.expired) {
       return false
     }
 
-    if (identity.auth?.fingerprint) {
-      const fingerprint = cert.fingerprint256 || cert.fingerprint
-      if (!fingerprint || fingerprint !== identity.auth.fingerprint) {
-        return false
-      }
+    if (await this.isRevokedFingerprint(certInfo.fingerprint, identity)) {
+      return false
     }
 
-    return true
+    const bindings = this.resolveBindings(identity)
+    if (bindings.length === 0 && this.requireExplicitCertBinding) {
+      this.logger.warn(`No cert bindings configured for ${identity.chargePointId}`)
+      return false
+    }
+
+    if (bindings.length === 0) {
+      return this.matchesFallback(certInfo, identity)
+    }
+
+    return this.matchesBinding(certInfo, bindings, identity.chargePointId)
   }
 
   private verifySecret(password: string, identity: ChargerIdentity): boolean {
@@ -191,6 +228,125 @@ export class ChargerIdentityService {
     }
 
     return false
+  }
+
+  private resolveBindings(identity: ChargerIdentity): ChargerCertificateBinding[] {
+    const auth = identity.auth || {}
+    const bindings: ChargerCertificateBinding[] = []
+
+    if (Array.isArray(auth.certificates)) {
+      bindings.push(...auth.certificates)
+    }
+
+    if (auth.fingerprint || auth.subject) {
+      bindings.push({
+        fingerprint: auth.fingerprint,
+        subject: auth.subject,
+        status: 'active',
+      })
+    }
+
+    return bindings
+  }
+
+  private matchesBinding(
+    certInfo: ExtractedCertInfo,
+    bindings: ChargerCertificateBinding[],
+    chargePointId: string
+  ): boolean {
+    const now = Date.now()
+    return bindings.some((binding) => {
+      if (binding.status === 'revoked') return false
+      if (binding.chargePointId && binding.chargePointId !== chargePointId) {
+        return false
+      }
+      if (!this.isWithinWindow(binding.validFrom, binding.validTo, now)) {
+        return false
+      }
+
+      const fingerprintMatch = binding.fingerprint
+        ? this.normalizeFingerprint(binding.fingerprint) === certInfo.fingerprint
+        : false
+      const subjectMatch = binding.subject
+        ? binding.subject === certInfo.subject
+        : false
+      const altMatch = binding.subjectAltName
+        ? certInfo.altNames.includes(binding.subjectAltName)
+        : false
+      const serialMatch = binding.serialNumber
+        ? binding.serialNumber === certInfo.serialNumber
+        : false
+
+      return fingerprintMatch || subjectMatch || altMatch || serialMatch
+    })
+  }
+
+  private matchesFallback(certInfo: ExtractedCertInfo, identity: ChargerIdentity): boolean {
+    if (identity.auth?.subject && certInfo.subject) {
+      return identity.auth.subject === certInfo.subject
+    }
+    if (identity.auth?.fingerprint && certInfo.fingerprint) {
+      return this.normalizeFingerprint(identity.auth.fingerprint) === certInfo.fingerprint
+    }
+    return false
+  }
+
+  private async isRevokedFingerprint(fingerprint: string, identity: ChargerIdentity): Promise<boolean> {
+    const normalized = this.normalizeFingerprint(fingerprint)
+    const revokedList = identity.auth?.revokedFingerprints || []
+    if (revokedList.map((entry) => this.normalizeFingerprint(entry)).includes(normalized)) {
+      return true
+    }
+
+    const client = this.redis.getClient()
+    const key = `${this.revokedPrefix}:${normalized}`
+    const exists = await client.exists(key)
+    return exists === 1
+  }
+
+  private normalizeFingerprint(value: string): string {
+    return value.replace(/:/g, '').toUpperCase()
+  }
+
+  private extractCertInfo(cert: any): ExtractedCertInfo {
+    const subject = cert.subject?.CN || ''
+    const serialNumber = cert.serialNumber || ''
+    const fingerprintRaw = cert.fingerprint256 || cert.fingerprint || ''
+    const fingerprint = fingerprintRaw ? this.normalizeFingerprint(fingerprintRaw) : ''
+    const altNames = this.parseAltNames(cert.subjectaltname || '')
+    const now = Date.now()
+
+    if (cert.valid_from && cert.valid_to) {
+      if (!this.isWithinWindow(cert.valid_from, cert.valid_to, now)) {
+        return { fingerprint, subject, serialNumber, altNames, expired: true }
+      }
+    }
+
+    return { fingerprint, subject, serialNumber, altNames }
+  }
+
+  private parseAltNames(subjectAltName: string): string[] {
+    if (!subjectAltName) return []
+    return subjectAltName
+      .split(',')
+      .map((entry: string) => entry.trim())
+      .filter(Boolean)
+  }
+
+  private isWithinWindow(from?: string, to?: string, now: number = Date.now()): boolean {
+    const fromTs = from ? Date.parse(from) : Number.NEGATIVE_INFINITY
+    const toTs = to ? Date.parse(to) : Number.POSITIVE_INFINITY
+    if (Number.isNaN(fromTs) || Number.isNaN(toTs)) {
+      return false
+    }
+    return now >= fromTs && now <= toTs
+  }
+
+  private normalizeVersion(version: string): string {
+    if (version.toLowerCase() === '1.6' || version.toLowerCase() === '1.6j') {
+      return '1.6J'
+    }
+    return version
   }
 
   private hashSecret(secret: string, salt?: string): string {

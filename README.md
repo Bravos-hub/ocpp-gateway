@@ -60,10 +60,15 @@ Key: `chargers:{chargePointId}`
   "status": "active",
   "allowedProtocols": ["1.6J", "2.0.1", "2.1"],
   "auth": {
-    "type": "basic",
-    "username": "CP-001",
-    "secretHash": "sha256hex...",
-    "secretSalt": "optional-salt"
+    "type": "mtls",
+    "certificates": [
+      {
+        "fingerprint": "AA:BB:CC:DD:EE",
+        "subject": "CN=CP-001",
+        "validFrom": "2026-01-01T00:00:00Z",
+        "validTo": "2027-01-01T00:00:00Z"
+      }
+    ]
   }
 }
 ```
@@ -72,6 +77,35 @@ Auth modes:
 - `basic`: `Authorization: Basic base64(username:password)`
 - `token`: `Authorization: Bearer <token>` or `x-api-key: <token>`
 - `mtls`: charger certificate subject/fingerprint must match the identity record
+
+Certificate rotation:
+- Add multiple `certificates` entries with overlapping `validFrom`/`validTo` windows.
+
+Revocation (denylist):
+- Set `revoked-certs:{fingerprint}` in Redis (fingerprint normalized without `:`) to block a certificate immediately.
+- You can also list `revokedFingerprints` on the identity record.
+- `OCPP_REQUIRE_CERT_BINDING=true` enforces explicit `certificates` bindings for mTLS.
+
+Provisioning audit:
+- Use `npm run provision:charger <identity.json>` and `npm run revoke:cert <fingerprint>` to write identities and revocations.
+- Each write emits an audit event to `cpms.audit.events` with actor metadata.
+  - Set `PROVISION_ACTOR_ID`, `PROVISION_ACTOR_TYPE`, `PROVISION_ACTOR_IP`, `PROVISION_REASON`.
+
+## TLS / mTLS settings
+
+Configure TLS in `.env` to enable mTLS on the gateway:
+
+```env
+OCPP_TLS_ENABLED=true
+OCPP_TLS_CLIENT_AUTH=true
+OCPP_TLS_KEY_PATH=path/to/server.key
+OCPP_TLS_CERT_PATH=path/to/server.crt
+OCPP_TLS_CA_PATH=path/to/ca.pem
+OCPP_TLS_CRL_PATH=path/to/crl.pem
+OCPP_TLS_MIN_VERSION=TLSv1.2
+```
+
+If your PKI provides CRLs, set `OCPP_TLS_CRL_PATH` to enforce revocation at handshake.
 
 ## Security
 

@@ -4,6 +4,7 @@ import Redis from 'ioredis'
 
 type RedisClient = {
   get(key: string): Promise<string | null>
+  set(key: string, value: string): Promise<'OK'>
   setex(key: string, seconds: number, value: string): Promise<'OK'>
   exists(key: string): Promise<number>
   del(key: string): Promise<number>
@@ -23,6 +24,11 @@ class InMemoryRedisClient implements RedisClient {
   async get(key: string): Promise<string | null> {
     const entry = this.getEntry(key)
     return entry ? entry.value : null
+  }
+
+  async set(key: string, value: string): Promise<'OK'> {
+    this.store.set(this.fullKey(key), { value, expiresAt: null })
+    return 'OK'
   }
 
   async setex(key: string, seconds: number, value: string): Promise<'OK'> {
@@ -94,6 +100,10 @@ export class RedisService implements OnModuleDestroy {
 
   async setex(key: string, seconds: number, value: string): Promise<void> {
     await this.client.setex(key, seconds, value)
+  }
+
+  async set(key: string, value: string): Promise<void> {
+    await this.client.set(key, value)
   }
 
   async onModuleDestroy(): Promise<void> {
