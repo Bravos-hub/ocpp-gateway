@@ -46,6 +46,11 @@ WEBSOCKET_OCPP_PORT=8080
 
 Example: `ws://localhost:3001/ocpp/1.6/CP-001`
 
+Subprotocols are required and must match the version:
+- `ocpp1.6`
+- `ocpp2.0.1`
+- `ocpp2.1`
+
 ## Charger Identity & Auth
 
 The gateway authenticates chargers against a Redis-backed identity record:

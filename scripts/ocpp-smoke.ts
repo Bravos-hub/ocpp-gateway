@@ -11,8 +11,8 @@ class OcppTestClient {
   private readonly ws: WebSocket
   private readonly pending = new Map<string, Pending>()
 
-  constructor(private readonly url: string) {
-    this.ws = new WebSocket(url)
+  constructor(private readonly url: string, protocol: string) {
+    this.ws = new WebSocket(url, protocol)
   }
 
   async connect(): Promise<void> {
@@ -77,7 +77,8 @@ function isCallError(message: unknown): message is [number, string, string, stri
 }
 
 async function runOcpp16(url: string) {
-  const client = new OcppTestClient(url)
+  const protocol = process.env.OCPP16_PROTOCOL || 'ocpp1.6'
+  const client = new OcppTestClient(url, protocol)
   await client.connect()
 
   const boot = await client.call('BootNotification', {
@@ -103,7 +104,8 @@ async function runOcpp16(url: string) {
 }
 
 async function runOcpp2(url: string) {
-  const client = new OcppTestClient(url)
+  const protocol = process.env.OCPP2_PROTOCOL || 'ocpp2.0.1'
+  const client = new OcppTestClient(url, protocol)
   await client.connect()
 
   const boot = await client.call('BootNotification', {

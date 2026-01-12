@@ -20,6 +20,21 @@ export class OcppWsAdapter extends WsAdapter {
       try {
         const baseUrl = `ws://${request.headers.host || 'localhost'}/`
         const pathname = new URL(request.url || '', baseUrl).pathname
+        const expectedProtocol = this.expectedProtocolFromPath(pathname)
+        const offeredProtocols = this.parseProtocols(request.headers['sec-websocket-protocol'])
+
+        if (!expectedProtocol || offeredProtocols.length === 0) {
+          socket.end('HTTP/1.1 400 Bad Request\r\n\r\nMissing Sec-WebSocket-Protocol')
+          return
+        }
+
+        const hasExpected = offeredProtocols.includes(expectedProtocol)
+        if (!hasExpected) {
+          socket.end('HTTP/1.1 400 Bad Request\r\n\r\nInvalid Sec-WebSocket-Protocol')
+          return
+        }
+
+        request.headers['sec-websocket-protocol'] = expectedProtocol
         const wsServersCollection = this.wsServersRegistry.get(port) ?? []
         let isRequestDelegated = false
 
@@ -47,6 +62,34 @@ export class OcppWsAdapter extends WsAdapter {
   // Allow dynamic segments under the gateway path (e.g. /ocpp/1.6/CP-1).
   private isPathMatch(pathname: string, wsPath: string): boolean {
     return pathname === wsPath || pathname.startsWith(`${wsPath}/`)
+  }
+
+  private expectedProtocolFromPath(pathname: string): string | null {
+    const parts = pathname.split('/').filter(Boolean)
+    const ocppIndex = parts.findIndex((part) => part.toLowerCase() === 'ocpp')
+    const rawVersion = ocppIndex >= 0 ? parts[ocppIndex + 1] : undefined
+    if (!rawVersion) return null
+
+    const version = rawVersion.toLowerCase()
+    if (version === '1.6' || version === '1.6j') {
+      return 'ocpp1.6'
+    }
+    if (version === '2.0.1') {
+      return 'ocpp2.0.1'
+    }
+    if (version === '2.1') {
+      return 'ocpp2.1'
+    }
+    return null
+  }
+
+  private parseProtocols(header: string | string[] | undefined): string[] {
+    if (!header) return []
+    const raw = Array.isArray(header) ? header.join(',') : header
+    return raw
+      .split(',')
+      .map((value) => value.trim().toLowerCase())
+      .filter(Boolean)
   }
 
   private createServer(): http.Server {
