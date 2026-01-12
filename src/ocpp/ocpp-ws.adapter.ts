@@ -4,6 +4,7 @@ import * as fs from 'fs'
 import * as http from 'http'
 import * as https from 'https'
 import { Socket } from 'net'
+import type { SecureVersion } from 'tls'
 
 export class OcppWsAdapter extends WsAdapter {
   protected ensureHttpServerExists(
@@ -63,7 +64,7 @@ export class OcppWsAdapter extends WsAdapter {
     const caPath = process.env.OCPP_TLS_CA_PATH
     const crlPath = process.env.OCPP_TLS_CRL_PATH
     const requestCert = (process.env.OCPP_TLS_CLIENT_AUTH ?? 'true') === 'true'
-    const minVersion = process.env.OCPP_TLS_MIN_VERSION || 'TLSv1.2'
+    const minVersion = this.resolveMinVersion(process.env.OCPP_TLS_MIN_VERSION)
     const ciphers =
       process.env.OCPP_TLS_CIPHERS ||
       'TLS_AES_256_GCM_SHA384:TLS_AES_128_GCM_SHA256:TLS_CHACHA20_POLY1305_SHA256:' +
@@ -82,5 +83,11 @@ export class OcppWsAdapter extends WsAdapter {
       honorCipherOrder: true,
       secureOptions: constants.SSL_OP_NO_RENEGOTIATION,
     })
+  }
+
+  private resolveMinVersion(value?: string): SecureVersion {
+    if (!value) return 'TLSv1.2'
+    if (value === 'TLSv1.3') return 'TLSv1.3'
+    return 'TLSv1.2'
   }
 }
