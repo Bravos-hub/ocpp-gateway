@@ -3,11 +3,11 @@ import { buildCallError, buildCallResult, OCPP_MESSAGE_TYPES, parseEnvelope } fr
 import { OcppResponseCache } from './response-cache.service'
 import { OcppRequestTracker } from './request-tracker.service'
 import { OcppSchemaValidator } from './schema-validator.service'
-import { OcppRateLimiter } from './ocpp-rate-limiter.service'
 import { OcppAdapter, OcppContext } from './versions/ocpp-adapter.interface'
 import { Ocpp16Adapter } from './versions/ocpp16.adapter'
 import { Ocpp201Adapter } from './versions/ocpp201.adapter'
 import { Ocpp21Adapter } from './versions/ocpp21.adapter'
+import { MetricsService } from '../metrics/metrics.service'
 
 @Injectable()
 export class OcppService {
@@ -19,9 +19,9 @@ export class OcppService {
     ocpp201: Ocpp201Adapter,
     ocpp21: Ocpp21Adapter,
     private readonly validator: OcppSchemaValidator,
-    private readonly rateLimiter: OcppRateLimiter,
     private readonly responseCache: OcppResponseCache,
-    private readonly requestTracker: OcppRequestTracker
+    private readonly requestTracker: OcppRequestTracker,
+    private readonly metrics: MetricsService
   ) {
     this.adapters = {
       '1.6J': ocpp16,
@@ -44,6 +44,13 @@ export class OcppService {
       this.logger.warn(`Unexpected OCPP envelope: ${parsed.error.reason}`)
       if (parsed.error.messageTypeId === OCPP_MESSAGE_TYPES.CALL && parsed.error.uniqueId) {
         const code = context.ocppVersion === '1.6J' ? 'FormationViolation' : 'FormatViolation'
+        this.metrics.increment('ocpp_schema_failures_total', {
+          direction: 'inbound',
+          phase: 'request',
+          version: context.ocppVersion,
+          reason: 'envelope_invalid',
+        })
+        this.metrics.increment('ocpp_error_codes_total', { code, direction: 'inbound' })
         return buildCallError(parsed.error.uniqueId, code, parsed.error.reason, {
           reason: parsed.error.reason,
         })
@@ -75,35 +82,39 @@ export class OcppService {
       return cached
     }
 
-    const limit = await this.rateLimiter.check(context, envelope.action)
-    if (!limit.allowed && limit.error) {
-      const error = buildCallError(
-        envelope.uniqueId,
-        limit.error.code,
-        limit.error.description,
-        limit.error.details || {}
-      )
-      this.responseCache.set(context, envelope.uniqueId, error)
-      return error
-    }
-
     if (!this.validator.hasSchema(context.ocppVersion, envelope.action)) {
+      this.metrics.increment('ocpp_schema_failures_total', {
+        direction: 'inbound',
+        phase: 'request',
+        action: envelope.action,
+        version: context.ocppVersion,
+        reason: 'schema_missing',
+      })
       const error = buildCallError(
         envelope.uniqueId,
         'NotImplemented',
         `Action ${envelope.action} not supported`,
         {}
       )
+      this.metrics.increment('ocpp_error_codes_total', { code: 'NotImplemented', direction: 'inbound' })
       this.responseCache.set(context, envelope.uniqueId, error)
       return error
     }
 
     const validation = this.validator.validate(context.ocppVersion, envelope.action, envelope.payload)
     if (!validation.valid) {
+      this.metrics.increment('ocpp_schema_failures_total', {
+        direction: 'inbound',
+        phase: 'request',
+        action: envelope.action,
+        version: context.ocppVersion,
+        reason: 'validation_failed',
+      })
       const code = context.ocppVersion === '1.6J' ? 'FormationViolation' : 'FormatViolation'
       const error = buildCallError(envelope.uniqueId, code, 'Payload validation failed', {
         errors: validation.errors || [],
       })
+      this.metrics.increment('ocpp_error_codes_total', { code, direction: 'inbound' })
       this.responseCache.set(context, envelope.uniqueId, error)
       return error
     }
@@ -111,6 +122,10 @@ export class OcppService {
     const result = await adapter.handleCall(envelope.action, envelope.payload, context)
 
     if (result.error) {
+      this.metrics.increment('ocpp_error_codes_total', {
+        code: result.error.code,
+        direction: 'inbound',
+      })
       const error = buildCallError(
         envelope.uniqueId,
         result.error.code,
@@ -122,12 +137,20 @@ export class OcppService {
     }
 
     if (!this.validator.hasResponseSchema(context.ocppVersion, envelope.action)) {
+      this.metrics.increment('ocpp_schema_failures_total', {
+        direction: 'inbound',
+        phase: 'response',
+        action: envelope.action,
+        version: context.ocppVersion,
+        reason: 'response_schema_missing',
+      })
       const error = buildCallError(
         envelope.uniqueId,
         'InternalError',
         `No response schema for ${envelope.action}`,
         {}
       )
+      this.metrics.increment('ocpp_error_codes_total', { code: 'InternalError', direction: 'inbound' })
       this.responseCache.set(context, envelope.uniqueId, error)
       return error
     }
@@ -140,9 +163,17 @@ export class OcppService {
     )
 
     if (!responseValidation.valid) {
+      this.metrics.increment('ocpp_schema_failures_total', {
+        direction: 'inbound',
+        phase: 'response',
+        action: envelope.action,
+        version: context.ocppVersion,
+        reason: 'response_validation_failed',
+      })
       const error = buildCallError(envelope.uniqueId, 'InternalError', 'Response validation failed', {
         errors: responseValidation.errors || [],
       })
+      this.metrics.increment('ocpp_error_codes_total', { code: 'InternalError', direction: 'inbound' })
       this.responseCache.set(context, envelope.uniqueId, error)
       return error
     }

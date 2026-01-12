@@ -59,6 +59,25 @@ export class KafkaService implements OnModuleDestroy {
     await producer.send({ topic, messages: [{ key, value: message }] })
   }
 
+  async checkConnection(): Promise<{ status: 'up' | 'down' | 'disabled'; error?: string }> {
+    if (!this.enabled || !this.kafka) {
+      return { status: 'disabled' }
+    }
+    const admin = this.kafka.admin()
+    try {
+      await admin.connect()
+      await admin.disconnect()
+      return { status: 'up' }
+    } catch (error) {
+      try {
+        await admin.disconnect()
+      } catch {
+        // no-op
+      }
+      return { status: 'down', error: (error as Error).message }
+    }
+  }
+
   async onModuleDestroy(): Promise<void> {
     for (const consumer of this.consumers.values()) {
       await consumer.disconnect()

@@ -3,12 +3,14 @@ import { ConfigModule } from '@nestjs/config'
 import configuration from './config/configuration'
 import { HealthModule } from './health/health.module'
 import { KafkaModule } from './kafka/kafka.module'
+import { MetricsModule } from './metrics/metrics.module'
 import { OcppModule } from './ocpp/ocpp.module'
 import { RedisModule } from './redis/redis.module'
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true, load: [configuration] }),
+    MetricsModule,
     KafkaModule,
     RedisModule,
     OcppModule,

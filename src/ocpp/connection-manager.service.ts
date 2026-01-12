@@ -49,4 +49,8 @@ export class ConnectionManager {
     if (!socket) return undefined
     return this.byClient.get(socket)
   }
+
+  getConnectionCount(): number {
+    return this.byClient.size
+  }
 }

@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common'
 import { OcppSchemaValidator } from './schema-validator.service'
 import { CommandAuditService } from './command-audit.service'
 import { OcppContext } from './versions/ocpp-adapter.interface'
+import { MetricsService } from '../metrics/metrics.service'
 
 export type OutboundResult =
   | { status: 'accepted'; payload: unknown }
@@ -25,7 +26,8 @@ export class OcppRequestTracker {
 
   constructor(
     private readonly validator: OcppSchemaValidator,
-    private readonly audit: CommandAuditService
+    private readonly audit: CommandAuditService,
+    private readonly metrics: MetricsService
   ) {}
 
   register(
@@ -41,6 +43,10 @@ export class OcppRequestTracker {
         if (auditCommandId) {
           void this.audit.recordTimeout(uniqueId)
         }
+        this.metrics.increment('ocpp_timeouts_total', {
+          direction: 'outbound',
+          action,
+        })
         reject(new Error('timeout'))
       }, timeoutMs)
 
@@ -71,11 +77,22 @@ export class OcppRequestTracker {
     )
 
     if (!validation.valid) {
+      this.metrics.increment('ocpp_schema_failures_total', {
+        direction: 'outbound',
+        phase: 'response',
+        action: pending.action,
+        version: pending.context.ocppVersion,
+        reason: 'response_validation_failed',
+      })
       if (pending.auditCommandId) {
         void this.audit.recordRejected(uniqueId, 'ResponseValidationFailed', 'Invalid response payload', {
           errors: validation.errors || [],
         })
       }
+      this.metrics.increment('ocpp_error_codes_total', {
+        code: 'ResponseValidationFailed',
+        direction: 'outbound',
+      })
       pending.resolve({
         status: 'error',
         errorCode: 'ResponseValidationFailed',
@@ -105,6 +122,7 @@ export class OcppRequestTracker {
     if (pending.auditCommandId) {
       void this.audit.recordRejected(uniqueId, errorCode, errorDescription, errorDetails)
     }
+    this.metrics.increment('ocpp_error_codes_total', { code: errorCode, direction: 'outbound' })
     pending.resolve({
       status: 'error',
       errorCode,

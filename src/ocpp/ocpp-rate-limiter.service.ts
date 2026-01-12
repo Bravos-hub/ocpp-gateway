@@ -81,7 +81,7 @@ export class OcppRateLimiter {
   }
 
   private async increment(key: string, ttlSeconds: number): Promise<number> {
-    const client = this.redis.getClient() as any
+    const client = this.redis.getClient()
     const count = await client.incr(key)
     if (count === 1 && ttlSeconds > 0) {
       await client.expire(key, ttlSeconds)

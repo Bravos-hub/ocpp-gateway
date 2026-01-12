@@ -11,6 +11,7 @@ type RedisClient = {
   incr(key: string): Promise<number>
   exists(key: string): Promise<number>
   del(key: string): Promise<number>
+  ping(): Promise<string>
   quit(): Promise<'OK' | void>
 }
 
@@ -79,6 +80,10 @@ class InMemoryRedisClient implements RedisClient {
     return existed ? 1 : 0
   }
 
+  async ping(): Promise<string> {
+    return 'PONG'
+  }
+
   async quit(): Promise<'OK'> {
     this.store.clear()
     return 'OK'
@@ -104,11 +109,13 @@ class InMemoryRedisClient implements RedisClient {
 export class RedisService implements OnModuleDestroy {
   private readonly client: RedisClient
   private readonly logger = new Logger(RedisService.name)
+  private readonly enabled: boolean
 
   constructor(private readonly config: ConfigService) {
     const url = this.config.get<string>('redis.url') ?? 'redis://localhost:6379'
     const keyPrefix = this.config.get<string>('redis.prefix') || 'ocpp'
     const enabled = this.config.get<boolean>('redis.enabled') ?? true
+    this.enabled = enabled
     const prefix = keyPrefix ? `${keyPrefix}:` : ''
 
     if (enabled) {
@@ -123,6 +130,22 @@ export class RedisService implements OnModuleDestroy {
 
   getClient(): RedisClient {
     return this.client
+  }
+
+  isEnabled(): boolean {
+    return this.enabled
+  }
+
+  async checkConnection(): Promise<{ status: 'up' | 'down' | 'disabled'; error?: string }> {
+    if (!this.enabled) {
+      return { status: 'disabled' }
+    }
+    try {
+      const response = await this.client.ping()
+      return { status: response === 'PONG' ? 'up' : 'down' }
+    } catch (error) {
+      return { status: 'down', error: (error as Error).message }
+    }
   }
 
   async exists(key: string): Promise<boolean> {
