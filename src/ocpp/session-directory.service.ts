@@ -7,6 +7,8 @@ type SessionEntry = {
   chargePointId: string
   ocppVersion: string
   nodeId: string
+  stationId?: string
+  tenantId?: string
   connectedAt: string
   lastSeenAt: string
 }
@@ -31,6 +33,8 @@ export class SessionDirectoryService {
       chargePointId: context.chargePointId,
       ocppVersion: context.ocppVersion,
       nodeId: this.nodeId,
+      stationId: context.stationId,
+      tenantId: context.tenantId,
       connectedAt: now,
       lastSeenAt: now,
     }

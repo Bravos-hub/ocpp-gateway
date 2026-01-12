@@ -41,10 +41,37 @@ WEBSOCKET_OCPP_PORT=8080
 
 ## WebSocket Endpoint
 
-**Development**: `ws://localhost:3001/ocpp/CP-{chargePointId}`
-**Production**: `wss://your-domain.com/ocpp/CP-{chargePointId}`
+**Development**: `ws://localhost:3001/ocpp/{version}/{chargePointId}`
+**Production**: `wss://your-domain.com/ocpp/{version}/{chargePointId}`
 
-Example: `ws://localhost:3001/ocpp/CP-001`
+Example: `ws://localhost:3001/ocpp/1.6/CP-001`
+
+## Charger Identity & Auth
+
+The gateway authenticates chargers against a Redis-backed identity record:
+
+Key: `chargers:{chargePointId}`
+
+```json
+{
+  "chargePointId": "CP-001",
+  "stationId": "station-123",
+  "tenantId": "tenant-abc",
+  "status": "active",
+  "allowedProtocols": ["1.6J", "2.0.1", "2.1"],
+  "auth": {
+    "type": "basic",
+    "username": "CP-001",
+    "secretHash": "sha256hex...",
+    "secretSalt": "optional-salt"
+  }
+}
+```
+
+Auth modes:
+- `basic`: `Authorization: Basic base64(username:password)`
+- `token`: `Authorization: Bearer <token>` or `x-api-key: <token>`
+- `mtls`: charger certificate subject/fingerprint must match the identity record
 
 ## Security
 

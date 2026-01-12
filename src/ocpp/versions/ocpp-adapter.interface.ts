@@ -1,6 +1,8 @@
 export type OcppContext = {
   chargePointId: string
   ocppVersion: string
+  stationId?: string
+  tenantId?: string
 }
 
 export type OcppError = {

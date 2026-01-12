@@ -26,4 +26,9 @@ export default () => ({
     url: process.env.REDIS_URL ?? 'redis://localhost:6379',
     prefix: process.env.REDIS_PREFIX || 'ocpp',
   },
+  auth: {
+    mode: process.env.OCPP_AUTH_MODE || 'basic',
+    identityPrefix: process.env.OCPP_IDENTITY_PREFIX || 'chargers',
+    allowPlaintextSecrets: (process.env.OCPP_ALLOW_PLAINTEXT_SECRETS ?? 'false') === 'true',
+  },
 })

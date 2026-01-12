@@ -37,6 +37,8 @@ export class OcppEventPublisher {
       eventType,
       source: 'ocpp-gateway',
       occurredAt: new Date().toISOString(),
+      stationId: context.stationId,
+      tenantId: context.tenantId,
       chargePointId: context.chargePointId,
       ocppVersion: context.ocppVersion,
       payload,

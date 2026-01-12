@@ -5,6 +5,7 @@ export type DomainEvent = {
   occurredAt: string
   correlationId?: string
   stationId?: string
+  tenantId?: string
   chargePointId?: string
   connectorId?: number
   ocppVersion?: string

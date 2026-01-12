@@ -19,7 +19,7 @@ export class OcppGateway implements OnGatewayConnection, OnGatewayDisconnect {
   ) {}
 
   async handleConnection(client: WebSocket, request: IncomingMessage) {
-    const context = this.parseContext(request)
+    const context = this.parseContext(client, request)
     if (!context) {
       client.close(1008, 'Invalid OCPP path')
       return
@@ -63,11 +63,11 @@ export class OcppGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
   }
 
-  private parseContext(request: IncomingMessage) {
+  private parseContext(client: WebSocket, request: IncomingMessage) {
     const url = request.url || ''
     const path = url.split('?')[0]
     const parts = path.split('/').filter(Boolean)
-    const ocppIndex = parts.indexOf('ocpp')
+    const ocppIndex = parts.findIndex((part) => part.toLowerCase() === 'ocpp')
     const rawVersion = ocppIndex >= 0 ? parts[ocppIndex + 1] : undefined
     const rawId = ocppIndex >= 0 ? parts[ocppIndex + 2] : undefined
 
@@ -75,15 +75,24 @@ export class OcppGateway implements OnGatewayConnection, OnGatewayDisconnect {
       return null
     }
 
-    const normalizedVersion = rawVersion === '1.6' ? '1.6J' : rawVersion
-    const allowedVersions = new Set(['1.6', '1.6J', '2.0.1', '2.1'])
+    const normalizedVersion = rawVersion.toLowerCase() === '1.6' || rawVersion.toLowerCase() === '1.6j'
+      ? '1.6J'
+      : rawVersion
+    const allowedVersions = new Set(['1.6J', '2.0.1', '2.1'])
     if (!allowedVersions.has(normalizedVersion)) {
+      return null
+    }
+
+    const identity = (client as any).ocppIdentity as { stationId?: string; tenantId?: string } | undefined
+    if (!identity) {
       return null
     }
 
     return {
       ocppVersion: normalizedVersion,
       chargePointId: rawId,
+      stationId: identity.stationId,
+      tenantId: identity.tenantId,
     }
   }
 }

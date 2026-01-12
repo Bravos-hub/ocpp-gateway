@@ -4,6 +4,8 @@ import { WebSocket } from 'ws'
 export type ConnectionMeta = {
   chargePointId: string
   ocppVersion: string
+  stationId?: string
+  tenantId?: string
 }
 
 @Injectable()
