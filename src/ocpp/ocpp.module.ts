@@ -22,6 +22,7 @@ import { ChargerIdentityProvisioner } from './charger-identity-provisioner.servi
 import { NodeDirectoryService } from './node-directory.service'
 import { SessionControlPublisher } from './session-control-publisher.service'
 import { SessionControlConsumerService } from './session-control-consumer.service'
+import { CommandAuditService } from './command-audit.service'
 
 @Module({
   imports: [KafkaModule, RedisModule],
@@ -47,6 +48,7 @@ import { SessionControlConsumerService } from './session-control-consumer.servic
     NodeDirectoryService,
     SessionControlPublisher,
     SessionControlConsumerService,
+    CommandAuditService,
   ],
 })
 export class OcppModule {}

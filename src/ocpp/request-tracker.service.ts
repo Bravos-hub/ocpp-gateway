@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common'
 import { OcppSchemaValidator } from './schema-validator.service'
+import { CommandAuditService } from './command-audit.service'
 import { OcppContext } from './versions/ocpp-adapter.interface'
 
 export type OutboundResult =
@@ -14,6 +15,7 @@ type PendingRequest = {
   timeout: NodeJS.Timeout
   resolve: (result: OutboundResult) => void
   reject: (error: Error) => void
+  auditCommandId?: string
 }
 
 @Injectable()
@@ -21,17 +23,24 @@ export class OcppRequestTracker {
   private readonly logger = new Logger(OcppRequestTracker.name)
   private readonly pending = new Map<string, PendingRequest>()
 
-  constructor(private readonly validator: OcppSchemaValidator) {}
+  constructor(
+    private readonly validator: OcppSchemaValidator,
+    private readonly audit: CommandAuditService
+  ) {}
 
   register(
     uniqueId: string,
     action: string,
     context: OcppContext,
-    timeoutMs: number
+    timeoutMs: number,
+    auditCommandId?: string
   ): Promise<OutboundResult> {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.pending.delete(uniqueId)
+        if (auditCommandId) {
+          void this.audit.recordTimeout(uniqueId)
+        }
         reject(new Error('timeout'))
       }, timeoutMs)
 
@@ -43,6 +52,7 @@ export class OcppRequestTracker {
         timeout,
         resolve,
         reject,
+        auditCommandId,
       })
     })
   }
@@ -61,6 +71,11 @@ export class OcppRequestTracker {
     )
 
     if (!validation.valid) {
+      if (pending.auditCommandId) {
+        void this.audit.recordRejected(uniqueId, 'ResponseValidationFailed', 'Invalid response payload', {
+          errors: validation.errors || [],
+        })
+      }
       pending.resolve({
         status: 'error',
         errorCode: 'ResponseValidationFailed',
@@ -70,6 +85,9 @@ export class OcppRequestTracker {
       return
     }
 
+    if (pending.auditCommandId) {
+      void this.audit.recordAccepted(uniqueId, payload)
+    }
     pending.resolve({ status: 'accepted', payload })
   }
 
@@ -84,6 +102,9 @@ export class OcppRequestTracker {
 
     clearTimeout(pending.timeout)
     this.pending.delete(uniqueId)
+    if (pending.auditCommandId) {
+      void this.audit.recordRejected(uniqueId, errorCode, errorDescription, errorDetails)
+    }
     pending.resolve({
       status: 'error',
       errorCode,

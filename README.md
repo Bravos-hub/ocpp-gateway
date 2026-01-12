@@ -68,6 +68,11 @@ Subprotocols are required and must match the version:
 - `OCPP_RATE_LIMIT_WINDOW_SECONDS` sets the counting window.
 - `OCPP_RATE_LIMIT_PER_CP` and `OCPP_RATE_LIMIT_GLOBAL` apply to `MeterValues` and `StatusNotification`.
 
+## Command audit persistence
+
+- Outbound CALLs are stored in Redis with their `uniqueId`, payload, and response payload/error.
+- `COMMAND_AUDIT_TTL_SECONDS` controls how long audit entries are retained.
+
 ## Multi-node routing
 
 - Each charge point session is claimed in Redis (`sessions:{chargePointId}`) with a `nodeId`.

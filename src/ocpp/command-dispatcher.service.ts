@@ -5,6 +5,7 @@ import { CommandRequest } from '../contracts/commands'
 import { OcppSchemaValidator } from './schema-validator.service'
 import { OcppContext } from './versions/ocpp-adapter.interface'
 import { OcppRequestTracker, OutboundResult } from './request-tracker.service'
+import { CommandAuditService } from './command-audit.service'
 
 type DispatchResult = OutboundResult | { status: 'timeout' }
 
@@ -14,7 +15,8 @@ export class OcppCommandDispatcher {
 
   constructor(
     private readonly validator: OcppSchemaValidator,
-    private readonly tracker: OcppRequestTracker
+    private readonly tracker: OcppRequestTracker,
+    private readonly audit: CommandAuditService
   ) {}
 
   async dispatch(
@@ -58,7 +60,13 @@ export class OcppCommandDispatcher {
       ? (command.timeoutSec as number) * 1000
       : this.defaultTimeoutMs
 
-    const pending = this.tracker.register(uniqueId, action, context, timeoutMs)
+    try {
+      await this.audit.recordDispatch(command, context, action, uniqueId, payload)
+    } catch {
+      // Audit failures should not block command delivery.
+    }
+
+    const pending = this.tracker.register(uniqueId, action, context, timeoutMs, command.commandId)
     socket.send(JSON.stringify(message))
 
     try {
