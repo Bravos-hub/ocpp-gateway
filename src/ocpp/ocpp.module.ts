@@ -18,6 +18,8 @@ import { OcppSecurityGuard } from './guards/ocpp-security.guard'
 import { ChargerIdentityService } from './charger-identity.service'
 import { ChargerIdentityProvisioner } from './charger-identity-provisioner.service'
 import { NodeDirectoryService } from './node-directory.service'
+import { SessionControlPublisher } from './session-control-publisher.service'
+import { SessionControlConsumerService } from './session-control-consumer.service'
 
 @Module({
   imports: [KafkaModule, RedisModule],
@@ -39,6 +41,8 @@ import { NodeDirectoryService } from './node-directory.service'
     ChargerIdentityService,
     ChargerIdentityProvisioner,
     NodeDirectoryService,
+    SessionControlPublisher,
+    SessionControlConsumerService,
   ],
 })
 export class OcppModule {}

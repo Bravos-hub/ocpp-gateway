@@ -6,6 +6,7 @@ export type ConnectionMeta = {
   ocppVersion: string
   stationId?: string
   tenantId?: string
+  sessionEpoch?: number
 }
 
 @Injectable()

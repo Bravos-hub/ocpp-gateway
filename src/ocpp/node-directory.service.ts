@@ -1,12 +1,13 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { RedisService } from '../redis/redis.service'
-import { commandRequestsForNode } from '../contracts/kafka-topics'
+import { commandRequestsForNode, sessionControlForNode } from '../contracts/kafka-topics'
 
 export type NodeInfo = {
   nodeId: string
   advertiseUrl?: string
   commandTopic: string
+  sessionControlTopic: string
   startedAt: string
   lastSeenAt: string
 }
@@ -50,6 +51,7 @@ export class NodeDirectoryService implements OnModuleInit, OnModuleDestroy {
       nodeId: this.nodeId,
       advertiseUrl: this.advertiseUrl,
       commandTopic: commandRequestsForNode(this.nodeId),
+      sessionControlTopic: sessionControlForNode(this.nodeId),
       startedAt: now,
       lastSeenAt: now,
     }

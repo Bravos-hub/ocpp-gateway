@@ -1,4 +1,5 @@
 import { Logger, UseGuards } from '@nestjs/common'
+import { ConfigService } from '@nestjs/config'
 import { OnGatewayConnection, OnGatewayDisconnect, WebSocketGateway } from '@nestjs/websockets'
 import { IncomingMessage } from 'http'
 import { WebSocket, type RawData } from 'ws'
@@ -6,17 +7,23 @@ import { ConnectionManager } from './connection-manager.service'
 import { OcppService } from './ocpp.service'
 import { OcppSecurityGuard } from './guards/ocpp-security.guard'
 import { SessionDirectoryService } from './session-directory.service'
+import { SessionControlPublisher } from './session-control-publisher.service'
 
 @UseGuards(OcppSecurityGuard)
 @WebSocketGateway({ path: '/ocpp', cors: { origin: '*' } })
 export class OcppGateway implements OnGatewayConnection, OnGatewayDisconnect {
   private readonly logger = new Logger(OcppGateway.name)
+  private readonly nodeId: string
 
   constructor(
     private readonly connections: ConnectionManager,
     private readonly ocppService: OcppService,
-    private readonly sessions: SessionDirectoryService
-  ) {}
+    private readonly sessions: SessionDirectoryService,
+    private readonly sessionControl: SessionControlPublisher,
+    private readonly config: ConfigService
+  ) {
+    this.nodeId = process.env.NODE_ID || this.config.get<string>('service.name') || 'ocpp-gateway'
+  }
 
   async handleConnection(client: WebSocket, request: IncomingMessage) {
     const context = this.parseContext(client, request)
@@ -31,7 +38,19 @@ export class OcppGateway implements OnGatewayConnection, OnGatewayDisconnect {
       client.close(1013, 'Charge point already connected')
       return
     }
-    this.connections.register(client, context)
+    if (claim.takeover && claim.ownerNodeId && claim.ownerNodeId !== this.nodeId) {
+      await this.sessionControl.forceDisconnect(
+        claim.ownerNodeId,
+        context.chargePointId,
+        claim.entry?.epoch || 0,
+        'Session taken over'
+      )
+    }
+    const meta = {
+      ...context,
+      sessionEpoch: claim.entry?.epoch,
+    }
+    this.connections.register(client, meta)
     client.on('message', (data) => {
       void this.handleMessage(data, client)
     })

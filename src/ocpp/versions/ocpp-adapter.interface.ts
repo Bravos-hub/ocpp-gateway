@@ -3,6 +3,7 @@ export type OcppContext = {
   ocppVersion: string
   stationId?: string
   tenantId?: string
+  sessionEpoch?: number
 }
 
 export type OcppError = {

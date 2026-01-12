@@ -62,6 +62,7 @@ Subprotocols are required and must match the version:
 - Each charge point session is claimed in Redis (`sessions:{chargePointId}`) with a `nodeId`.
 - New connections are rejected if another node already owns the session.
 - Commands are routed to the owning node via Kafka topic `cpms.command.requests.node.{nodeId}`.
+- Stale sessions can be taken over if `SESSION_STALE_SECONDS` is exceeded; a force-disconnect is sent to the previous owner via `ocpp.session.control.node.{nodeId}`.
 
 ## Charger Identity & Auth
 
