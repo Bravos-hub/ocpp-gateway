@@ -10,6 +10,7 @@ import { OcppEventPublisher } from './ocpp-event-publisher.service'
 import { OcppResponseCache } from './response-cache.service'
 import { OcppRequestTracker } from './request-tracker.service'
 import { OcppSchemaValidator } from './schema-validator.service'
+import { SessionDirectoryService } from './session-directory.service'
 import { Ocpp16Adapter } from './versions/ocpp16.adapter'
 import { Ocpp201Adapter } from './versions/ocpp201.adapter'
 import { Ocpp21Adapter } from './versions/ocpp21.adapter'
@@ -27,6 +28,7 @@ import { OcppSecurityGuard } from './guards/ocpp-security.guard'
     OcppResponseCache,
     OcppRequestTracker,
     OcppSchemaValidator,
+    SessionDirectoryService,
     Ocpp16Adapter,
     Ocpp201Adapter,
     Ocpp21Adapter,

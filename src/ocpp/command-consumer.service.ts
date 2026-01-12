@@ -18,6 +18,10 @@ export class CommandConsumerService implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   async onModuleInit(): Promise<void> {
+    if (!this.kafka.isEnabled()) {
+      this.logger.warn('Kafka disabled; command consumer not started')
+      return
+    }
     const consumer = await this.kafka.getConsumer()
     await consumer.subscribe({ topic: KAFKA_TOPICS.commandRequests })
 

@@ -6,7 +6,13 @@ export default () => ({
     port: parseInt(process.env.PORT || '3001', 10),
   },
   kafka: {
-    brokers: (process.env.KAFKA_BROKERS || 'localhost:9092')
+    enabled:
+      (process.env.KAFKA_ENABLED ?? 'true') !== 'false' &&
+      (process.env.KAFKA_BROKERS ?? 'localhost:9092')
+        .split(',')
+        .map((broker) => broker.trim())
+        .filter(Boolean).length > 0,
+    brokers: (process.env.KAFKA_BROKERS ?? 'localhost:9092')
       .split(',')
       .map((broker) => broker.trim())
       .filter(Boolean),
@@ -14,7 +20,10 @@ export default () => ({
     groupId: process.env.KAFKA_GROUP_ID || 'ocpp-gateway',
   },
   redis: {
-    url: process.env.REDIS_URL || 'redis://localhost:6379',
+    enabled:
+      (process.env.REDIS_ENABLED ?? 'true') !== 'false' &&
+      (process.env.REDIS_URL ?? 'redis://localhost:6379').length > 0,
+    url: process.env.REDIS_URL ?? 'redis://localhost:6379',
     prefix: process.env.REDIS_PREFIX || 'ocpp',
   },
 })
