@@ -106,6 +106,12 @@ export class OcppGateway implements OnGatewayConnection, OnGatewayDisconnect {
           : data instanceof ArrayBuffer
             ? Buffer.from(data).toString('utf8')
             : JSON.stringify(data)
+    const maxBytes = parseInt(process.env.OCPP_MAX_PAYLOAD_BYTES || '0', 10)
+    if (maxBytes > 0 && Buffer.byteLength(payload, 'utf8') > maxBytes) {
+      this.logger.warn('Payload exceeds configured size limit')
+      client.close(1009, 'Payload too large')
+      return
+    }
     if (!meta) {
       this.logger.warn('Received message without connection metadata')
       return

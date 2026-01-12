@@ -62,6 +62,12 @@ Subprotocols are required and must match the version:
 - `OCPP_STATE_STRICT=true` enforces transaction/session consistency (unknown transactions return CallError).
 - Set `OCPP_STATE_STRICT=false` to allow orphaned MeterValues/TransactionEvent updates during testing.
 
+## Rate limits and payload size
+
+- `OCPP_MAX_PAYLOAD_BYTES` rejects oversized frames (0 disables).
+- `OCPP_RATE_LIMIT_WINDOW_SECONDS` sets the counting window.
+- `OCPP_RATE_LIMIT_PER_CP` and `OCPP_RATE_LIMIT_GLOBAL` apply to `MeterValues` and `StatusNotification`.
+
 ## Multi-node routing
 
 - Each charge point session is claimed in Redis (`sessions:{chargePointId}`) with a `nodeId`.

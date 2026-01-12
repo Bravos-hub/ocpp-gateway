@@ -11,6 +11,7 @@ import { OcppResponseCache } from './response-cache.service'
 import { OcppRequestTracker } from './request-tracker.service'
 import { OcppSchemaValidator } from './schema-validator.service'
 import { OcppStateService } from './ocpp-state.service'
+import { OcppRateLimiter } from './ocpp-rate-limiter.service'
 import { SessionDirectoryService } from './session-directory.service'
 import { Ocpp16Adapter } from './versions/ocpp16.adapter'
 import { Ocpp201Adapter } from './versions/ocpp201.adapter'
@@ -35,6 +36,7 @@ import { SessionControlConsumerService } from './session-control-consumer.servic
     OcppRequestTracker,
     OcppSchemaValidator,
     OcppStateService,
+    OcppRateLimiter,
     SessionDirectoryService,
     Ocpp16Adapter,
     Ocpp201Adapter,

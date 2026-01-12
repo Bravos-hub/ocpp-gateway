@@ -8,6 +8,7 @@ type RedisClient = {
   setex(key: string, seconds: number, value: string): Promise<'OK'>
   setnx(key: string, value: string): Promise<number>
   expire(key: string, seconds: number): Promise<number>
+  incr(key: string): Promise<number>
   exists(key: string): Promise<number>
   del(key: string): Promise<number>
   quit(): Promise<'OK' | void>
@@ -56,6 +57,16 @@ class InMemoryRedisClient implements RedisClient {
     entry.expiresAt = seconds > 0 ? Date.now() + seconds * 1000 : null
     this.store.set(fullKey, entry)
     return 1
+  }
+
+  async incr(key: string): Promise<number> {
+    const fullKey = this.fullKey(key)
+    const entry = this.getEntry(key)
+    const current = entry ? parseInt(entry.value, 10) : 0
+    const next = Number.isNaN(current) ? 1 : current + 1
+    const expiresAt = entry ? entry.expiresAt : null
+    this.store.set(fullKey, { value: String(next), expiresAt })
+    return next
   }
 
   async exists(key: string): Promise<number> {

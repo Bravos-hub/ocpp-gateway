@@ -3,6 +3,7 @@ import { buildCallError, buildCallResult, OCPP_MESSAGE_TYPES, parseEnvelope } fr
 import { OcppResponseCache } from './response-cache.service'
 import { OcppRequestTracker } from './request-tracker.service'
 import { OcppSchemaValidator } from './schema-validator.service'
+import { OcppRateLimiter } from './ocpp-rate-limiter.service'
 import { OcppAdapter, OcppContext } from './versions/ocpp-adapter.interface'
 import { Ocpp16Adapter } from './versions/ocpp16.adapter'
 import { Ocpp201Adapter } from './versions/ocpp201.adapter'
@@ -18,6 +19,7 @@ export class OcppService {
     ocpp201: Ocpp201Adapter,
     ocpp21: Ocpp21Adapter,
     private readonly validator: OcppSchemaValidator,
+    private readonly rateLimiter: OcppRateLimiter,
     private readonly responseCache: OcppResponseCache,
     private readonly requestTracker: OcppRequestTracker
   ) {
@@ -71,6 +73,18 @@ export class OcppService {
     const cached = this.responseCache.get(context, envelope.uniqueId)
     if (cached) {
       return cached
+    }
+
+    const limit = await this.rateLimiter.check(context, envelope.action)
+    if (!limit.allowed && limit.error) {
+      const error = buildCallError(
+        envelope.uniqueId,
+        limit.error.code,
+        limit.error.description,
+        limit.error.details || {}
+      )
+      this.responseCache.set(context, envelope.uniqueId, error)
+      return error
     }
 
     if (!this.validator.hasSchema(context.ocppVersion, envelope.action)) {
