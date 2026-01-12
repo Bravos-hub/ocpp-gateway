@@ -47,9 +47,15 @@ WEBSOCKET_OCPP_PORT=8080
 Example: `ws://localhost:3001/ocpp/1.6/CP-001`
 
 Subprotocols are required and must match the version:
-- `ocpp1.6`
+- `ocpp1.6` (alias: `ocpp1.6j`)
 - `ocpp2.0.1`
 - `ocpp2.1`
+
+## Schema validation
+
+- Uses official schemas for OCPP 1.6J/2.0.1/2.1.
+- `additionalProperties` defaults to `false` for strict validation.
+- Set `OCPP_SCHEMA_ALLOW_ADDITIONAL_ACTIONS` to allow extra fields for specific actions (default: `DataTransfer`).
 
 ## Charger Identity & Auth
 

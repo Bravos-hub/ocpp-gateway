@@ -20,21 +20,23 @@ export class OcppWsAdapter extends WsAdapter {
       try {
         const baseUrl = `ws://${request.headers.host || 'localhost'}/`
         const pathname = new URL(request.url || '', baseUrl).pathname
-        const expectedProtocol = this.expectedProtocolFromPath(pathname)
+        const expectedProtocols = this.expectedProtocolsFromPath(pathname)
         const offeredProtocols = this.parseProtocols(request.headers['sec-websocket-protocol'])
 
-        if (!expectedProtocol || offeredProtocols.length === 0) {
+        if (!expectedProtocols || expectedProtocols.length === 0 || offeredProtocols.length === 0) {
           socket.end('HTTP/1.1 400 Bad Request\r\n\r\nMissing Sec-WebSocket-Protocol')
           return
         }
 
-        const hasExpected = offeredProtocols.includes(expectedProtocol)
-        if (!hasExpected) {
+        const matchedProtocol = expectedProtocols.find((protocol) =>
+          offeredProtocols.includes(protocol)
+        )
+        if (!matchedProtocol) {
           socket.end('HTTP/1.1 400 Bad Request\r\n\r\nInvalid Sec-WebSocket-Protocol')
           return
         }
 
-        request.headers['sec-websocket-protocol'] = expectedProtocol
+        request.headers['sec-websocket-protocol'] = matchedProtocol
         const wsServersCollection = this.wsServersRegistry.get(port) ?? []
         let isRequestDelegated = false
 
@@ -64,7 +66,7 @@ export class OcppWsAdapter extends WsAdapter {
     return pathname === wsPath || pathname.startsWith(`${wsPath}/`)
   }
 
-  private expectedProtocolFromPath(pathname: string): string | null {
+  private expectedProtocolsFromPath(pathname: string): string[] | null {
     const parts = pathname.split('/').filter(Boolean)
     const ocppIndex = parts.findIndex((part) => part.toLowerCase() === 'ocpp')
     const rawVersion = ocppIndex >= 0 ? parts[ocppIndex + 1] : undefined
@@ -72,13 +74,13 @@ export class OcppWsAdapter extends WsAdapter {
 
     const version = rawVersion.toLowerCase()
     if (version === '1.6' || version === '1.6j') {
-      return 'ocpp1.6'
+      return ['ocpp1.6', 'ocpp1.6j']
     }
     if (version === '2.0.1') {
-      return 'ocpp2.0.1'
+      return ['ocpp2.0.1']
     }
     if (version === '2.1') {
-      return 'ocpp2.1'
+      return ['ocpp2.1']
     }
     return null
   }
