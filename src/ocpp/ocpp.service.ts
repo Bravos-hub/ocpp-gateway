@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common'
-import { buildCallError, buildCallResult, parseEnvelope } from './ocpp-envelope'
+import { buildCallError, buildCallResult, OCPP_MESSAGE_TYPES, parseEnvelope } from './ocpp-envelope'
 import { OcppResponseCache } from './response-cache.service'
 import { OcppRequestTracker } from './request-tracker.service'
 import { OcppSchemaValidator } from './schema-validator.service'
@@ -37,11 +37,18 @@ export class OcppService {
       return null
     }
 
-    const envelope = parseEnvelope(message)
-    if (!envelope) {
-      this.logger.warn('Unexpected OCPP envelope')
+    const parsed = parseEnvelope(message)
+    if (!parsed.ok) {
+      this.logger.warn(`Unexpected OCPP envelope: ${parsed.error.reason}`)
+      if (parsed.error.messageTypeId === OCPP_MESSAGE_TYPES.CALL && parsed.error.uniqueId) {
+        const code = context.ocppVersion === '1.6J' ? 'FormationViolation' : 'FormatViolation'
+        return buildCallError(parsed.error.uniqueId, code, parsed.error.reason, {
+          reason: parsed.error.reason,
+        })
+      }
       return null
     }
+    const envelope = parsed.envelope
 
     const adapter = this.adapters[context.ocppVersion] || this.adapters['1.6J']
 

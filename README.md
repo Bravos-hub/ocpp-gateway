@@ -57,6 +57,11 @@ Subprotocols are required and must match the version:
 - `additionalProperties` defaults to `false` for strict validation.
 - Set `OCPP_SCHEMA_ALLOW_ADDITIONAL_ACTIONS` to allow extra fields for specific actions (default: `DataTransfer`).
 
+## State machine strictness
+
+- `OCPP_STATE_STRICT=true` enforces transaction/session consistency (unknown transactions return CallError).
+- Set `OCPP_STATE_STRICT=false` to allow orphaned MeterValues/TransactionEvent updates during testing.
+
 ## Multi-node routing
 
 - Each charge point session is claimed in Redis (`sessions:{chargePointId}`) with a `nodeId`.

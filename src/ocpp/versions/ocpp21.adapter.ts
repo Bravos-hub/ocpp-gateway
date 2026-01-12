@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common'
 import { OcppEventPublisher } from '../ocpp-event-publisher.service'
+import { OcppStateService } from '../ocpp-state.service'
 import { OcppAdapter, OcppContext, OcppHandlerResult } from './ocpp-adapter.interface'
 
 @Injectable()
@@ -7,11 +8,15 @@ export class Ocpp21Adapter implements OcppAdapter {
   readonly version = '2.1'
   private readonly logger = new Logger(Ocpp21Adapter.name)
 
-  constructor(private readonly publisher: OcppEventPublisher) {}
+  constructor(
+    private readonly publisher: OcppEventPublisher,
+    private readonly state: OcppStateService
+  ) {}
 
   async handleCall(action: string, payload: unknown, context: OcppContext): Promise<OcppHandlerResult> {
     switch (action) {
       case 'BootNotification': {
+        this.state.recordBoot(context)
         await this.publisher.publishStationEvent('StationBooted', context, {
           action,
           payload,
@@ -25,6 +30,7 @@ export class Ocpp21Adapter implements OcppAdapter {
         }
       }
       case 'Heartbeat': {
+        this.state.recordHeartbeat(context)
         await this.publisher.publishStationEvent('StationHeartbeat', context, {
           action,
           payload,
@@ -36,11 +42,21 @@ export class Ocpp21Adapter implements OcppAdapter {
         }
       }
       case 'StatusNotification': {
+        const typed = payload as { evseId: number; connectorId?: number; connectorStatus: string }
+        this.state.updateStatus2(context, typed.evseId, typed.connectorId, typed.connectorStatus)
         await this.publisher.publishStationEvent('ConnectorStatusChanged', context, {
           action,
           payload,
         })
         return { response: {} }
+      }
+      case 'Authorize': {
+        const idTokenInfo = this.state.authorize2()
+        return {
+          response: {
+            idTokenInfo,
+          },
+        }
       }
       case 'SecurityEventNotification': {
         await this.publisher.publishStationEvent('SecurityEventNotification', context, {
@@ -57,13 +73,18 @@ export class Ocpp21Adapter implements OcppAdapter {
         return { response: {} }
       }
       case 'TransactionEvent': {
+        const result = this.state.handleTransactionEvent(context, payload)
+        if (result.error) {
+          return { error: result.error }
+        }
         await this.publisher.publishSessionEvent('SessionEvent', context, {
           action,
           payload,
+          idempotent: result.idempotent,
         })
         return {
           response: {
-            idTokenInfo: { status: 'Accepted' },
+            idTokenInfo: result.idTokenInfo,
           },
         }
       }

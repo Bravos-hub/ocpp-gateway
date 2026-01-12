@@ -114,7 +114,7 @@ return {0, entry.nodeId or '', tostring(entry.epoch or 0)}
       entry.epoch = result.epoch
       return { accepted: true, ownerNodeId, entry, takeover: true }
     }
-    return { accepted: false, ownerNodeId, entry: result.existing }
+    return { accepted: false, ownerNodeId, entry: result.existing ?? undefined }
   }
 
   async touch(chargePointId: string): Promise<void> {
