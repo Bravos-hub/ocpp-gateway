@@ -36,7 +36,15 @@ export class OcppSchemaValidator implements OnModuleInit {
   }
 
   async onModuleInit(): Promise<void> {
-    const ajv = new Ajv({ allErrors: true, strict: true })
+    const ajv = new Ajv({
+      allErrors: true,
+      strict: true,
+      strictSchema: false,
+      strictTypes: false,
+    })
+    const draft6MetaSchema = require('ajv/dist/refs/json-schema-draft-06.json') as any
+    ajv.addMetaSchema(draft6MetaSchema as any)
+    ajv.addKeyword({ keyword: 'javaType', schemaType: 'string' })
     addFormats(ajv)
 
     const ocpp21 = await loadOcpp21Schemas()

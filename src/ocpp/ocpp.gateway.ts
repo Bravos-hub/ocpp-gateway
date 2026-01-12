@@ -8,6 +8,7 @@ import { OcppService } from './ocpp.service'
 import { OcppSecurityGuard } from './guards/ocpp-security.guard'
 import { SessionDirectoryService } from './session-directory.service'
 import { SessionControlPublisher } from './session-control-publisher.service'
+import { ChargerIdentityService } from './charger-identity.service'
 
 @UseGuards(OcppSecurityGuard)
 @WebSocketGateway({ path: '/ocpp', cors: { origin: '*' } })
@@ -20,16 +21,42 @@ export class OcppGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private readonly ocppService: OcppService,
     private readonly sessions: SessionDirectoryService,
     private readonly sessionControl: SessionControlPublisher,
-    private readonly config: ConfigService
+    private readonly config: ConfigService,
+    private readonly identityService: ChargerIdentityService
   ) {
     this.nodeId = process.env.NODE_ID || this.config.get<string>('service.name') || 'ocpp-gateway'
   }
 
   async handleConnection(client: WebSocket, request: IncomingMessage) {
-    const context = this.parseContext(client, request)
-    if (!context) {
+    const pending: RawData[] = []
+    const handleQueued = (data: RawData) => {
+      const meta = this.connections.getMeta(client)
+      if (!meta) {
+        pending.push(data)
+        return
+      }
+      void this.handleMessage(data, client)
+    }
+    client.on('message', handleQueued)
+
+    const parsed = this.parsePath(request)
+    if (!parsed) {
       client.close(1008, 'Invalid OCPP path')
       return
+    }
+    const identity =
+      (client as any).ocppIdentity ||
+      (await this.identityService.authenticate(request, parsed.chargePointId, parsed.ocppVersion))
+    if (!identity) {
+      client.close(1008, 'Unauthorized')
+      return
+    }
+    ;(client as any).ocppIdentity = identity
+    const context = {
+      ocppVersion: parsed.ocppVersion,
+      chargePointId: parsed.chargePointId,
+      stationId: identity.stationId,
+      tenantId: identity.tenantId,
     }
     const claim = await this.sessions.claim(context)
     if (!claim.accepted) {
@@ -51,9 +78,11 @@ export class OcppGateway implements OnGatewayConnection, OnGatewayDisconnect {
       sessionEpoch: claim.entry?.epoch,
     }
     this.connections.register(client, meta)
-    client.on('message', (data) => {
-      void this.handleMessage(data, client)
-    })
+    if (pending.length > 0) {
+      for (const data of pending.splice(0, pending.length)) {
+        void this.handleMessage(data, client)
+      }
+    }
     this.logger.log(`Connected ${context.chargePointId} (${context.ocppVersion})`)
   }
 
@@ -88,7 +117,7 @@ export class OcppGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
   }
 
-  private parseContext(client: WebSocket, request: IncomingMessage) {
+  private parsePath(request: IncomingMessage): { ocppVersion: string; chargePointId: string } | null {
     const url = request.url || ''
     const path = url.split('?')[0]
     const parts = path.split('/').filter(Boolean)
@@ -100,24 +129,18 @@ export class OcppGateway implements OnGatewayConnection, OnGatewayDisconnect {
       return null
     }
 
-    const normalizedVersion = rawVersion.toLowerCase() === '1.6' || rawVersion.toLowerCase() === '1.6j'
-      ? '1.6J'
-      : rawVersion
+    const normalizedVersion =
+      rawVersion.toLowerCase() === '1.6' || rawVersion.toLowerCase() === '1.6j'
+        ? '1.6J'
+        : rawVersion
     const allowedVersions = new Set(['1.6J', '2.0.1', '2.1'])
     if (!allowedVersions.has(normalizedVersion)) {
-      return null
-    }
-
-    const identity = (client as any).ocppIdentity as { stationId?: string; tenantId?: string } | undefined
-    if (!identity) {
       return null
     }
 
     return {
       ocppVersion: normalizedVersion,
       chargePointId: rawId,
-      stationId: identity.stationId,
-      tenantId: identity.tenantId,
     }
   }
 }

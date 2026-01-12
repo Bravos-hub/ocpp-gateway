@@ -30,7 +30,11 @@ export class OcppSecurityGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const client = context.switchToWs().getClient()
-    const request = client.upgradeReq || client._socket?.parser?.incoming
+    const args = context.getArgs?.() || []
+    const request =
+      client.upgradeReq ||
+      client._socket?.parser?.incoming ||
+      args.find((arg: any) => arg && typeof arg === 'object' && arg.headers && arg.url)
     
     if (!request) return false
     
