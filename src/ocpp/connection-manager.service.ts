@@ -14,6 +14,15 @@ export class ConnectionManager {
   private readonly byChargePointId = new Map<string, WebSocket>()
 
   register(client: WebSocket, meta: ConnectionMeta) {
+    const existing = this.byChargePointId.get(meta.chargePointId)
+    if (existing && existing !== client) {
+      try {
+        existing.close(1008, 'Replaced by new connection')
+      } catch {
+        // ignore close errors
+      }
+      this.byClient.delete(existing)
+    }
     this.byClient.set(client, meta)
     this.byChargePointId.set(meta.chargePointId, client)
   }

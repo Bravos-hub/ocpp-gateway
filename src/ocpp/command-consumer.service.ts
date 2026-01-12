@@ -1,20 +1,28 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common'
+import { ConfigService } from '@nestjs/config'
 import { randomUUID } from 'crypto'
 import { KafkaService } from '../kafka/kafka.service'
-import { KAFKA_TOPICS } from '../contracts/kafka-topics'
+import { KAFKA_TOPICS, commandRequestsForNode } from '../contracts/kafka-topics'
 import { CommandRequest } from '../contracts/commands'
 import { DomainEvent } from '../contracts/events'
 import { ConnectionManager } from './connection-manager.service'
 import { OcppCommandDispatcher } from './command-dispatcher.service'
+import { SessionDirectoryService } from './session-directory.service'
+import { NodeDirectoryService } from './node-directory.service'
 
 @Injectable()
 export class CommandConsumerService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(CommandConsumerService.name)
+  private nodeId = ''
+  private nodeGroupId = ''
 
   constructor(
     private readonly kafka: KafkaService,
     private readonly connections: ConnectionManager,
-    private readonly dispatcher: OcppCommandDispatcher
+    private readonly dispatcher: OcppCommandDispatcher,
+    private readonly sessions: SessionDirectoryService,
+    private readonly nodes: NodeDirectoryService,
+    private readonly config: ConfigService
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -22,67 +30,103 @@ export class CommandConsumerService implements OnModuleInit, OnModuleDestroy {
       this.logger.warn('Kafka disabled; command consumer not started')
       return
     }
-    const consumer = await this.kafka.getConsumer()
-    await consumer.subscribe({ topic: KAFKA_TOPICS.commandRequests })
+    this.nodeId = process.env.NODE_ID || this.config.get<string>('service.name') || 'ocpp-gateway'
+    const baseGroupId = this.config.get<string>('kafka.groupId') || 'ocpp-gateway'
+    this.nodeGroupId = `${baseGroupId}-${this.nodeId}`
 
-    await consumer.run({
+    const sharedConsumer = await this.kafka.getConsumer()
+    await sharedConsumer.subscribe({ topic: KAFKA_TOPICS.commandRequests })
+    await sharedConsumer.run({
       eachMessage: async ({ message }) => {
-        const raw = message.value?.toString() || ''
-        if (!raw) return
+        await this.handleMessage(message.value?.toString() || '', 'shared')
+      },
+    })
 
-        let command: CommandRequest
-        try {
-          command = JSON.parse(raw) as CommandRequest
-        } catch {
-          this.logger.warn('Invalid command payload')
-          return
-        }
-
-        const chargePointId = command.chargePointId
-        if (!chargePointId) {
-          await this.publishCommandEvent(command, 'CommandFailed', 'Missing chargePointId')
-          return
-        }
-
-        const connection = this.connections.getByChargePointId(chargePointId)
-        const meta = this.connections.getMetaByChargePointId(chargePointId)
-        if (!connection || !meta) {
-          await this.publishCommandEvent(command, 'CommandFailed', 'Charge point offline')
-          return
-        }
-
-        const context = {
-          chargePointId,
-          ocppVersion: command.ocppVersion || meta.ocppVersion,
-        }
-
-        await this.publishCommandEvent(command, 'CommandDispatched')
-        const result = await this.dispatcher.dispatch(command, context, connection)
-
-        if (result.status === 'accepted') {
-          await this.publishCommandEvent(command, 'CommandAccepted', undefined, result.payload)
-          return
-        }
-
-        if (result.status === 'timeout') {
-          await this.publishCommandEvent(command, 'CommandTimeout', 'No response from charge point')
-          return
-        }
-
-        if (result.status === 'error') {
-          const errorCodes = ['UnsupportedCommand', 'SchemaMissing', 'PayloadValidationFailed']
-          const eventType = errorCodes.includes(result.errorCode) ? 'CommandFailed' : 'CommandRejected'
-          await this.publishCommandEvent(command, eventType, result.errorDescription, {
-            errorCode: result.errorCode,
-            errorDetails: result.errorDetails,
-          })
-        }
+    const nodeConsumer = await this.kafka.getConsumer(this.nodeGroupId)
+    await nodeConsumer.subscribe({ topic: commandRequestsForNode(this.nodeId) })
+    await nodeConsumer.run({
+      eachMessage: async ({ message }) => {
+        await this.handleMessage(message.value?.toString() || '', 'node')
       },
     })
   }
 
   async onModuleDestroy(): Promise<void> {
     await this.kafka.onModuleDestroy()
+  }
+
+  private async handleMessage(raw: string, source: 'shared' | 'node'): Promise<void> {
+    if (!raw) return
+
+    let command: CommandRequest
+    try {
+      command = JSON.parse(raw) as CommandRequest
+    } catch {
+      this.logger.warn('Invalid command payload')
+      return
+    }
+
+    const chargePointId = command.chargePointId
+    if (!chargePointId) {
+      await this.publishCommandEvent(command, 'CommandFailed', 'Missing chargePointId')
+      return
+    }
+
+    const ownerNodeId = await this.sessions.getOwnerNodeId(chargePointId)
+    if (ownerNodeId && ownerNodeId !== this.nodeId) {
+      if (source === 'shared') {
+        await this.routeToOwner(command, ownerNodeId)
+        return
+      }
+      await this.routeToOwner(command, ownerNodeId)
+      return
+    }
+
+    const connection = this.connections.getByChargePointId(chargePointId)
+    const meta = this.connections.getMetaByChargePointId(chargePointId)
+    if (!connection || !meta) {
+      await this.publishCommandEvent(command, 'CommandFailed', 'Charge point offline')
+      return
+    }
+
+    const context = {
+      chargePointId,
+      ocppVersion: command.ocppVersion || meta.ocppVersion,
+      stationId: meta.stationId,
+      tenantId: meta.tenantId,
+    }
+
+    await this.publishCommandEvent(command, 'CommandDispatched')
+    const result = await this.dispatcher.dispatch(command, context, connection)
+
+    if (result.status === 'accepted') {
+      await this.publishCommandEvent(command, 'CommandAccepted', undefined, result.payload)
+      return
+    }
+
+    if (result.status === 'timeout') {
+      await this.publishCommandEvent(command, 'CommandTimeout', 'No response from charge point')
+      return
+    }
+
+    if (result.status === 'error') {
+      const errorCodes = ['UnsupportedCommand', 'SchemaMissing', 'PayloadValidationFailed']
+      const eventType = errorCodes.includes(result.errorCode) ? 'CommandFailed' : 'CommandRejected'
+      await this.publishCommandEvent(command, eventType, result.errorDescription, {
+        errorCode: result.errorCode,
+        errorDetails: result.errorDetails,
+      })
+    }
+  }
+
+  private async routeToOwner(command: CommandRequest, ownerNodeId: string): Promise<void> {
+    const nodeInfo = await this.nodes.getNode(ownerNodeId)
+    const topic = nodeInfo?.commandTopic || commandRequestsForNode(ownerNodeId)
+    await this.kafka.publish(topic, JSON.stringify(command), command.chargePointId)
+    await this.publishCommandEvent(command, 'CommandRouted', undefined, {
+      ownerNodeId,
+      topic,
+    })
   }
 
   private async publishCommandEvent(

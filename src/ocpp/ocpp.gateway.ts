@@ -24,11 +24,17 @@ export class OcppGateway implements OnGatewayConnection, OnGatewayDisconnect {
       client.close(1008, 'Invalid OCPP path')
       return
     }
+    const claim = await this.sessions.claim(context)
+    if (!claim.accepted) {
+      const owner = claim.ownerNodeId ? `owned by ${claim.ownerNodeId}` : 'already claimed'
+      this.logger.warn(`Rejecting ${context.chargePointId}; ${owner}`)
+      client.close(1013, 'Charge point already connected')
+      return
+    }
     this.connections.register(client, context)
     client.on('message', (data) => {
       void this.handleMessage(data, client)
     })
-    await this.sessions.register(context)
     this.logger.log(`Connected ${context.chargePointId} (${context.ocppVersion})`)
   }
 

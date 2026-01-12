@@ -57,6 +57,12 @@ Subprotocols are required and must match the version:
 - `additionalProperties` defaults to `false` for strict validation.
 - Set `OCPP_SCHEMA_ALLOW_ADDITIONAL_ACTIONS` to allow extra fields for specific actions (default: `DataTransfer`).
 
+## Multi-node routing
+
+- Each charge point session is claimed in Redis (`sessions:{chargePointId}`) with a `nodeId`.
+- New connections are rejected if another node already owns the session.
+- Commands are routed to the owning node via Kafka topic `cpms.command.requests.node.{nodeId}`.
+
 ## Charger Identity & Auth
 
 The gateway authenticates chargers against a Redis-backed identity record:

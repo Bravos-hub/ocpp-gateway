@@ -6,6 +6,8 @@ type RedisClient = {
   get(key: string): Promise<string | null>
   set(key: string, value: string): Promise<'OK'>
   setex(key: string, seconds: number, value: string): Promise<'OK'>
+  setnx(key: string, value: string): Promise<number>
+  expire(key: string, seconds: number): Promise<number>
   exists(key: string): Promise<number>
   del(key: string): Promise<number>
   quit(): Promise<'OK' | void>
@@ -35,6 +37,25 @@ class InMemoryRedisClient implements RedisClient {
     const expiresAt = seconds > 0 ? Date.now() + seconds * 1000 : null
     this.store.set(this.fullKey(key), { value, expiresAt })
     return 'OK'
+  }
+
+  async setnx(key: string, value: string): Promise<number> {
+    const fullKey = this.fullKey(key)
+    const entry = this.store.get(fullKey)
+    if (entry && (entry.expiresAt === null || entry.expiresAt > Date.now())) {
+      return 0
+    }
+    this.store.set(fullKey, { value, expiresAt: null })
+    return 1
+  }
+
+  async expire(key: string, seconds: number): Promise<number> {
+    const fullKey = this.fullKey(key)
+    const entry = this.store.get(fullKey)
+    if (!entry) return 0
+    entry.expiresAt = seconds > 0 ? Date.now() + seconds * 1000 : null
+    this.store.set(fullKey, entry)
+    return 1
   }
 
   async exists(key: string): Promise<number> {
@@ -104,6 +125,20 @@ export class RedisService implements OnModuleDestroy {
 
   async set(key: string, value: string): Promise<void> {
     await this.client.set(key, value)
+  }
+
+  async setIfNotExists(key: string, value: string, ttlSeconds?: number): Promise<boolean> {
+    if (ttlSeconds && ttlSeconds > 0) {
+      const result = await (this.client as any).set(key, value, 'NX', 'EX', ttlSeconds)
+      return result === 'OK'
+    }
+    const result = await this.client.setnx(key, value)
+    return result === 1
+  }
+
+  async expire(key: string, ttlSeconds: number): Promise<boolean> {
+    const result = await this.client.expire(key, ttlSeconds)
+    return result === 1
   }
 
   async onModuleDestroy(): Promise<void> {
