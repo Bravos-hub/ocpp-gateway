@@ -55,17 +55,32 @@ export class ChargerIdentityService {
   private readonly revokedPrefix: string
   private readonly requireExplicitCertBinding: boolean
   private readonly defaultAuthMode: ChargerIdentityAuthType
+  private readonly allowBasicAuth: boolean
+  private readonly requireAllowedProtocols: boolean
+  private readonly requireSecretSalt: boolean
+  private readonly minSecretHashLength: number
+  private readonly minSaltLength: number
   private readonly allowPlaintextSecrets: boolean
 
   constructor(
     private readonly redis: RedisService,
     private readonly config: ConfigService
   ) {
+    const isProd = (process.env.NODE_ENV || '').toLowerCase() === 'production'
     this.keyPrefix = this.config.get<string>('auth.identityPrefix') || 'chargers'
     this.revokedPrefix = this.config.get<string>('auth.revokedPrefix') || 'revoked-certs'
     this.requireExplicitCertBinding = this.config.get<boolean>('auth.requireCertBinding') ?? true
     this.defaultAuthMode = (this.config.get<string>('auth.mode') || 'basic') as ChargerIdentityAuthType
-    this.allowPlaintextSecrets = this.config.get<boolean>('auth.allowPlaintextSecrets') ?? false
+    this.allowBasicAuth = this.config.get<boolean>('auth.allowBasic') ?? !isProd
+    this.requireAllowedProtocols = this.config.get<boolean>('auth.requireAllowedProtocols') ?? isProd
+    this.requireSecretSalt = this.config.get<boolean>('auth.requireSecretSalt') ?? true
+    this.minSecretHashLength = this.config.get<number>('auth.minSecretHashLength') || 64
+    this.minSaltLength = this.config.get<number>('auth.minSaltLength') || 8
+    const allowPlaintextSecrets = this.config.get<boolean>('auth.allowPlaintextSecrets') ?? false
+    if (allowPlaintextSecrets) {
+      this.logger.warn('Plaintext secrets are disabled and will be ignored')
+    }
+    this.allowPlaintextSecrets = false
   }
 
   async authenticate(
@@ -82,9 +97,13 @@ export class ChargerIdentityService {
       return null
     }
 
-    if (identity.allowedProtocols && identity.allowedProtocols.length > 0) {
-      const allowed = identity.allowedProtocols.map((version) => version.toUpperCase())
-      const normalized = this.normalizeVersion(ocppVersion).toUpperCase()
+    const allowed = this.normalizeAllowedProtocols(identity.allowedProtocols)
+    if (this.requireAllowedProtocols && allowed.length === 0) {
+      this.logger.warn(`Missing allowedProtocols for ${identity.chargePointId}`)
+      return null
+    }
+    if (allowed.length > 0) {
+      const normalized = this.normalizeVersion(ocppVersion)
       if (!allowed.includes(normalized)) {
         return null
       }
@@ -129,6 +148,9 @@ export class ChargerIdentityService {
   }
 
   private verifyBasic(request: IncomingMessage, identity: ChargerIdentity): boolean {
+    if (!this.validateBasicConfig(identity)) {
+      return false
+    }
     const header = request.headers['authorization'] || ''
     if (typeof header !== 'string' || !header.startsWith('Basic ')) {
       return false
@@ -149,6 +171,9 @@ export class ChargerIdentityService {
   }
 
   private verifyToken(request: IncomingMessage, identity: ChargerIdentity): boolean {
+    if (!this.validateTokenConfig(identity)) {
+      return false
+    }
     const header = request.headers['authorization']
     const apiKey = request.headers['x-api-key']
     let token = ''
@@ -209,10 +234,6 @@ export class ChargerIdentityService {
       return this.safeEqual(hash, auth.secretHash)
     }
 
-    if (auth.secret && this.allowPlaintextSecrets) {
-      return this.safeEqual(password, auth.secret)
-    }
-
     return false
   }
 
@@ -221,10 +242,6 @@ export class ChargerIdentityService {
     if (auth.tokenHash) {
       const hash = this.hashSecret(token, auth.secretSalt)
       return this.safeEqual(hash, auth.tokenHash)
-    }
-
-    if (auth.token && this.allowPlaintextSecrets) {
-      return this.safeEqual(token, auth.token)
     }
 
     return false
@@ -343,10 +360,76 @@ export class ChargerIdentityService {
   }
 
   private normalizeVersion(version: string): string {
-    if (version.toLowerCase() === '1.6' || version.toLowerCase() === '1.6j') {
+    const trimmed = version.trim()
+    const normalized = trimmed.toLowerCase()
+    if (normalized === '1.6' || normalized === '1.6j') {
       return '1.6J'
     }
-    return version
+    return trimmed
+  }
+
+  private normalizeAllowedProtocols(values?: string[]): string[] {
+    if (!values || values.length === 0) return []
+    const normalized = values
+      .map((value) => this.normalizeAllowedProtocol(value))
+      .filter((value): value is string => Boolean(value))
+    return Array.from(new Set(normalized))
+  }
+
+  private normalizeAllowedProtocol(value: string): string | null {
+    const trimmed = value.trim().toLowerCase()
+    if (!trimmed) return null
+    const withoutPrefix = trimmed.startsWith('ocpp') ? trimmed.slice(4) : trimmed
+    if (withoutPrefix === '1.6' || withoutPrefix === '1.6j') {
+      return '1.6J'
+    }
+    if (withoutPrefix === '2.0.1') {
+      return '2.0.1'
+    }
+    if (withoutPrefix === '2.1') {
+      return '2.1'
+    }
+    return null
+  }
+
+  private validateBasicConfig(identity: ChargerIdentity): boolean {
+    if (!this.allowBasicAuth) {
+      this.logger.warn(`Basic auth disabled for ${identity.chargePointId}`)
+      return false
+    }
+    const auth = identity.auth || {}
+    if (!auth.secretHash || !this.isHashStrong(auth.secretHash)) {
+      this.logger.warn(`Basic auth requires a strong secretHash for ${identity.chargePointId}`)
+      return false
+    }
+    if (this.requireSecretSalt && !this.isSaltStrong(auth.secretSalt)) {
+      this.logger.warn(`Basic auth requires secretSalt for ${identity.chargePointId}`)
+      return false
+    }
+    return true
+  }
+
+  private validateTokenConfig(identity: ChargerIdentity): boolean {
+    const auth = identity.auth || {}
+    if (!auth.tokenHash || !this.isHashStrong(auth.tokenHash)) {
+      this.logger.warn(`Token auth requires a strong tokenHash for ${identity.chargePointId}`)
+      return false
+    }
+    if (this.requireSecretSalt && !this.isSaltStrong(auth.secretSalt)) {
+      this.logger.warn(`Token auth requires secretSalt for ${identity.chargePointId}`)
+      return false
+    }
+    return true
+  }
+
+  private isHashStrong(value?: string): boolean {
+    if (!value) return false
+    return value.length >= this.minSecretHashLength
+  }
+
+  private isSaltStrong(value?: string): boolean {
+    if (!value) return false
+    return value.length >= this.minSaltLength
   }
 
   private hashSecret(secret: string, salt?: string): string {

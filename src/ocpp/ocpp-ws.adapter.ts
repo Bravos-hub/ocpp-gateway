@@ -96,6 +96,10 @@ export class OcppWsAdapter extends WsAdapter {
 
   private createServer(): http.Server {
     const tlsEnabled = (process.env.OCPP_TLS_ENABLED ?? 'false') === 'true'
+    const tlsRequired = this.isTlsRequired()
+    if (tlsRequired && !tlsEnabled) {
+      throw new Error('OCPP_TLS_ENABLED must be true when TLS is required')
+    }
     if (!tlsEnabled) {
       return http.createServer()
     }
@@ -109,6 +113,12 @@ export class OcppWsAdapter extends WsAdapter {
     const caPath = process.env.OCPP_TLS_CA_PATH
     const crlPath = process.env.OCPP_TLS_CRL_PATH
     const requestCert = (process.env.OCPP_TLS_CLIENT_AUTH ?? 'true') === 'true'
+    if (!requestCert) {
+      throw new Error('OCPP_TLS_CLIENT_AUTH must be true to enforce mTLS')
+    }
+    if (!caPath) {
+      throw new Error('OCPP_TLS_CA_PATH is required when mTLS is enabled')
+    }
     const minVersion = this.resolveMinVersion(process.env.OCPP_TLS_MIN_VERSION)
     const ciphers =
       process.env.OCPP_TLS_CIPHERS ||
@@ -119,7 +129,7 @@ export class OcppWsAdapter extends WsAdapter {
     return https.createServer({
       key: fs.readFileSync(keyPath),
       cert: fs.readFileSync(certPath),
-      ca: caPath ? fs.readFileSync(caPath) : undefined,
+      ca: fs.readFileSync(caPath),
       crl: crlPath ? fs.readFileSync(crlPath) : undefined,
       requestCert,
       rejectUnauthorized: requestCert,
@@ -134,5 +144,12 @@ export class OcppWsAdapter extends WsAdapter {
     if (!value) return 'TLSv1.2'
     if (value === 'TLSv1.3') return 'TLSv1.3'
     return 'TLSv1.2'
+  }
+
+  private isTlsRequired(): boolean {
+    const explicit = (process.env.OCPP_TLS_REQUIRED || '').toLowerCase()
+    if (explicit === 'true') return true
+    if (explicit === 'false') return false
+    return (process.env.NODE_ENV || '').toLowerCase() === 'production'
   }
 }
