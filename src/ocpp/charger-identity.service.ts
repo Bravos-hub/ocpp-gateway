@@ -1,11 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
-import { createHash, timingSafeEqual } from 'crypto'
+import { createHash, scryptSync, timingSafeEqual } from 'crypto'
 import { IncomingMessage } from 'http'
 import { isIP } from 'net'
 import { RedisService } from '../redis/redis.service'
 
 export type ChargerIdentityAuthType = 'basic' | 'token' | 'mtls'
+type HashAlgorithm = 'sha256' | 'scrypt'
 
 type ExtractedCertInfo = {
   fingerprint: string
@@ -18,6 +19,7 @@ type ExtractedCertInfo = {
 export type ChargerIdentityAuth = {
   type?: ChargerIdentityAuthType
   allowedTypes?: ChargerIdentityAuthType[]
+  hashAlgorithm?: string
   username?: string
   secretHash?: string
   secretSalt?: string
@@ -68,6 +70,8 @@ export class ChargerIdentityService {
   private readonly trustProxy: boolean
   private readonly globalAllowedIps: string[]
   private readonly globalAllowedCidrs: string[]
+  private readonly defaultHashAlgorithm: HashAlgorithm
+  private readonly scryptParams: { N: number; r: number; p: number; keyLen: number }
 
   constructor(
     private readonly redis: RedisService,
@@ -86,6 +90,14 @@ export class ChargerIdentityService {
     this.trustProxy = this.config.get<boolean>('auth.trustProxy') ?? false
     this.globalAllowedIps = this.normalizeList(this.config.get<string[]>('auth.allowedIps'))
     this.globalAllowedCidrs = this.normalizeList(this.config.get<string[]>('auth.allowedCidrs'))
+    this.defaultHashAlgorithm =
+      this.normalizeHashAlgorithm(this.config.get<string>('auth.hashAlgorithm')) || 'sha256'
+    this.scryptParams = {
+      N: this.config.get<number>('auth.scryptN') || 16384,
+      r: this.config.get<number>('auth.scryptR') || 8,
+      p: this.config.get<number>('auth.scryptP') || 1,
+      keyLen: this.config.get<number>('auth.scryptKeyLen') || 32,
+    }
     const allowPlaintextSecrets = this.config.get<boolean>('auth.allowPlaintextSecrets') ?? false
     if (allowPlaintextSecrets) {
       this.logger.warn('Plaintext secrets are disabled and will be ignored')
@@ -252,23 +264,22 @@ export class ChargerIdentityService {
 
   private verifySecret(password: string, identity: ChargerIdentity): boolean {
     const auth = identity.auth || {}
-
-    if (auth.secretHash) {
-      const hash = this.hashSecret(password, auth.secretSalt)
-      return this.safeEqual(hash, auth.secretHash)
+    const resolved = this.resolveHash(auth.secretHash, auth.hashAlgorithm)
+    if (!resolved) {
+      return false
     }
-
-    return false
+    const hash = this.hashSecret(password, auth.secretSalt, resolved.algorithm)
+    return this.safeEqual(hash, resolved.hash)
   }
 
   private verifyTokenValue(token: string, identity: ChargerIdentity): boolean {
     const auth = identity.auth || {}
-    if (auth.tokenHash) {
-      const hash = this.hashSecret(token, auth.secretSalt)
-      return this.safeEqual(hash, auth.tokenHash)
+    const resolved = this.resolveHash(auth.tokenHash, auth.hashAlgorithm)
+    if (!resolved) {
+      return false
     }
-
-    return false
+    const hash = this.hashSecret(token, auth.secretSalt, resolved.algorithm)
+    return this.safeEqual(hash, resolved.hash)
   }
 
   private resolveBindings(identity: ChargerIdentity): ChargerCertificateBinding[] {
@@ -659,9 +670,52 @@ export class ChargerIdentityService {
     return true
   }
 
+  private resolveHash(
+    value?: string,
+    algorithmOverride?: string
+  ): { algorithm: HashAlgorithm; hash: string } | null {
+    if (!value) return null
+    const parsed = this.parseHashValue(value)
+    if (!parsed.hash) {
+      return null
+    }
+    const algorithm =
+      parsed.algorithm ||
+      this.normalizeHashAlgorithm(algorithmOverride) ||
+      this.defaultHashAlgorithm
+    if (!algorithm) return null
+    return { algorithm, hash: parsed.hash }
+  }
+
+  private parseHashValue(value: string): { algorithm: HashAlgorithm | null; hash: string } {
+    const trimmed = value.trim()
+    if (!trimmed) {
+      return { algorithm: null, hash: '' }
+    }
+    const separator = trimmed.indexOf('$')
+    if (separator > 0) {
+      const prefix = trimmed.slice(0, separator)
+      const algorithm = this.normalizeHashAlgorithm(prefix)
+      if (algorithm) {
+        return { algorithm, hash: trimmed.slice(separator + 1) }
+      }
+    }
+    return { algorithm: null, hash: trimmed }
+  }
+
+  private normalizeHashAlgorithm(value?: string): HashAlgorithm | null {
+    if (!value || typeof value !== 'string') return null
+    const normalized = value.toLowerCase()
+    if (normalized === 'sha256' || normalized === 'scrypt') {
+      return normalized as HashAlgorithm
+    }
+    return null
+  }
+
   private isHashStrong(value?: string): boolean {
     if (!value) return false
-    return value.length >= this.minSecretHashLength
+    const parsed = this.parseHashValue(value)
+    return parsed.hash.length >= this.minSecretHashLength
   }
 
   private isSaltStrong(value?: string): boolean {
@@ -669,7 +723,21 @@ export class ChargerIdentityService {
     return value.length >= this.minSaltLength
   }
 
-  private hashSecret(secret: string, salt?: string): string {
+  private hashSecret(secret: string, salt: string | undefined, algorithm: HashAlgorithm): string {
+    if (algorithm === 'scrypt') {
+      try {
+        const derived = scryptSync(secret, salt || '', this.scryptParams.keyLen, {
+          N: this.scryptParams.N,
+          r: this.scryptParams.r,
+          p: this.scryptParams.p,
+        }) as Buffer
+        return derived.toString('hex')
+      } catch (error) {
+        this.logger.error('Failed to derive scrypt hash', (error as Error).message)
+        return ''
+      }
+    }
+
     const hash = createHash('sha256')
     if (salt) {
       hash.update(salt)

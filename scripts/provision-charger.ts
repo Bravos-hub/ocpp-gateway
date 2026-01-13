@@ -1,12 +1,14 @@
+import 'dotenv/config'
 import { readFileSync } from 'fs'
 import { resolve } from 'path'
-import { createHash, randomBytes } from 'crypto'
+import { createHash, randomBytes, scryptSync } from 'crypto'
 import { NestFactory } from '@nestjs/core'
 import { AppModule } from '../src/app.module'
 import { ChargerIdentityProvisioner, ProvisioningActor } from '../src/ocpp/charger-identity-provisioner.service'
 import { ChargerIdentity, ChargerIdentityAuthType } from '../src/ocpp/charger-identity.service'
 
 type MutableAuth = NonNullable<ChargerIdentity['auth']>
+type HashAlgorithm = 'sha256' | 'scrypt'
 
 async function main() {
   const inputPath = process.argv[2]
@@ -83,11 +85,61 @@ function ensureSaltedHash(
   if (!secret) return
 
   const salt = auth.secretSalt || process.env.PROVISION_SECRET_SALT || randomBytes(16).toString('hex')
+  const algorithm = resolveHashAlgorithm(auth)
+  const hash = deriveHash(secret, salt, algorithm)
+  auth.secretSalt = salt
+  auth.hashAlgorithm = normalizeHashAlgorithm(auth.hashAlgorithm) || algorithm
+  auth[hashField] = hash
+}
+
+function resolveHashAlgorithm(auth: MutableAuth): HashAlgorithm {
+  const fromAuth = normalizeHashAlgorithm(auth.hashAlgorithm)
+  if (fromAuth) return fromAuth
+  const fromEnv = normalizeHashAlgorithm(
+    process.env.PROVISION_HASH_ALGORITHM || process.env.OCPP_AUTH_HASH_ALGORITHM
+  )
+  return fromEnv || 'sha256'
+}
+
+function normalizeHashAlgorithm(value?: string): HashAlgorithm | null {
+  if (!value) return null
+  const normalized = value.toLowerCase()
+  if (normalized === 'sha256' || normalized === 'scrypt') {
+    return normalized as HashAlgorithm
+  }
+  return null
+}
+
+function deriveHash(secret: string, salt: string, algorithm: HashAlgorithm): string {
+  if (algorithm === 'scrypt') {
+    const params = getScryptParams()
+    const derived = scryptSync(secret, salt, params.keyLen, {
+      N: params.N,
+      r: params.r,
+      p: params.p,
+    }) as Buffer
+    return derived.toString('hex')
+  }
+
   const hash = createHash('sha256')
   hash.update(salt)
   hash.update(secret)
-  auth.secretSalt = salt
-  auth[hashField] = hash.digest('hex')
+  return hash.digest('hex')
+}
+
+function getScryptParams(): { N: number; r: number; p: number; keyLen: number } {
+  return {
+    N: parseIntValue(process.env.PROVISION_SCRYPT_N || process.env.OCPP_AUTH_SCRYPT_N, 16384),
+    r: parseIntValue(process.env.PROVISION_SCRYPT_R || process.env.OCPP_AUTH_SCRYPT_R, 8),
+    p: parseIntValue(process.env.PROVISION_SCRYPT_P || process.env.OCPP_AUTH_SCRYPT_P, 1),
+    keyLen: parseIntValue(process.env.PROVISION_SCRYPT_KEYLEN || process.env.OCPP_AUTH_SCRYPT_KEYLEN, 32),
+  }
+}
+
+function parseIntValue(value: string | undefined, fallback: number): number {
+  if (!value) return fallback
+  const parsed = parseInt(value, 10)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
 }
 
 main().catch((err) => {

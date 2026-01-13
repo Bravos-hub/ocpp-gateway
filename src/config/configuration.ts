@@ -46,6 +46,11 @@ export default () => {
       trustProxy: (process.env.OCPP_TRUST_PROXY ?? 'false') === 'true',
       allowedIps: parseList(process.env.OCPP_ALLOWED_IPS),
       allowedCidrs: parseList(process.env.OCPP_ALLOWED_CIDRS),
+      hashAlgorithm: process.env.OCPP_AUTH_HASH_ALGORITHM || 'sha256',
+      scryptN: parseInt(process.env.OCPP_AUTH_SCRYPT_N || '16384', 10),
+      scryptR: parseInt(process.env.OCPP_AUTH_SCRYPT_R || '8', 10),
+      scryptP: parseInt(process.env.OCPP_AUTH_SCRYPT_P || '1', 10),
+      scryptKeyLen: parseInt(process.env.OCPP_AUTH_SCRYPT_KEYLEN || '32', 10),
       allowBasic:
         (process.env.OCPP_AUTH_ALLOW_BASIC ?? (isProd ? 'false' : 'true')) === 'true',
       requireAllowedProtocols:

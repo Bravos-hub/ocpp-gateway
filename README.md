@@ -115,6 +115,11 @@ Auth modes:
 - `token`: `Authorization: Bearer <token>` or `x-api-key: <token>`
 - `mtls`: charger certificate subject/fingerprint must match the identity record
 
+Secret hashing:
+- `auth.hashAlgorithm` can be `sha256` or `scrypt` (defaults to `sha256` for backwards compatibility).
+- Set `OCPP_AUTH_HASH_ALGORITHM=scrypt` to use scrypt for new hashes.
+- Tune scrypt with `OCPP_AUTH_SCRYPT_N`, `OCPP_AUTH_SCRYPT_R`, `OCPP_AUTH_SCRYPT_P`, `OCPP_AUTH_SCRYPT_KEYLEN`.
+
 IP allowlists:
 - Global allowlist: `OCPP_ALLOWED_IPS`, `OCPP_ALLOWED_CIDRS`.
 - Per-charger allowlist: `allowedIps`, `allowedCidrs` on the identity record.
@@ -133,7 +138,8 @@ Provisioning audit:
 - Each write emits an audit event to `cpms.audit.events` with actor metadata.
   - Set `PROVISION_ACTOR_ID`, `PROVISION_ACTOR_TYPE`, `PROVISION_ACTOR_IP`, `PROVISION_REASON`.
   - Optional provisioning helpers: `PROVISION_ALLOWED_PROTOCOLS`, `PROVISION_AUTH_TYPE`, `PROVISION_SECRET`,
-    `PROVISION_SECRET_SALT`, `PROVISION_TOKEN` (generates salted hashes when missing in the JSON).
+    `PROVISION_SECRET_SALT`, `PROVISION_TOKEN`, `PROVISION_HASH_ALGORITHM`, `PROVISION_SCRYPT_N`,
+    `PROVISION_SCRYPT_R`, `PROVISION_SCRYPT_P`, `PROVISION_SCRYPT_KEYLEN` (generates salted hashes when missing).
 
 ## TLS / mTLS settings
 
@@ -147,9 +153,12 @@ OCPP_TLS_CERT_PATH=path/to/server.crt
 OCPP_TLS_CA_PATH=path/to/ca.pem
 OCPP_TLS_CRL_PATH=path/to/crl.pem
 OCPP_TLS_MIN_VERSION=TLSv1.2
+OCPP_TLS_RELOAD_SECONDS=0
+OCPP_TLS_CRL_RELOAD_SECONDS=0
 ```
 
 If your PKI provides CRLs, set `OCPP_TLS_CRL_PATH` to enforce revocation at handshake.
+Use `OCPP_TLS_RELOAD_SECONDS` (and/or `OCPP_TLS_CRL_RELOAD_SECONDS`) to reload rotated certs/CRLs without a restart.
 
 ## Security
 
