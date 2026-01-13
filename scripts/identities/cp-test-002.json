@@ -4,8 +4,11 @@
   "tenantId": "TENANT-DEV",
   "status": "active",
   "allowedProtocols": ["2.0.1"],
+  "allowedIps": ["127.0.0.1", "::1"],
+  "allowedCidrs": ["127.0.0.0/8", "::1/128"],
   "auth": {
     "type": "mtls",
+    "allowedTypes": ["mtls"],
     "certificates": [
       {
         "fingerprint": "F0:2B:5C:8B:B1:D8:78:6C:AA:46:42:E8:A5:15:6A:6E:29:5B:62:DC:04:18:CB:E1:7E:87:C6:79:40:52:83:51",
