@@ -3,15 +3,19 @@ import { ConfigService } from '@nestjs/config'
 import Redis from 'ioredis'
 import { CircuitBreaker, CircuitOpenError } from '../resilience/circuit-breaker'
 
+type RedisKey = string | Buffer
+type RedisValue = string | number | Buffer
+type RedisSetArg = string | number | Buffer | ((...args: any[]) => void)
+
 type RedisClient = {
-  get(key: string): Promise<string | null>
-  set(key: string, value: string, ...args: Array<string | number>): Promise<any>
-  setex(key: string, seconds: number, value: string): Promise<'OK'>
-  setnx(key: string, value: string): Promise<number>
-  expire(key: string, seconds: number): Promise<number>
-  incr(key: string): Promise<number>
-  exists(key: string): Promise<number>
-  del(key: string): Promise<number>
+  get(key: RedisKey): Promise<string | null>
+  set(key: RedisKey, value: RedisValue, ...args: any[]): Promise<any>
+  setex(key: RedisKey, seconds: number, value: RedisValue): Promise<'OK'>
+  setnx(key: RedisKey, value: RedisValue): Promise<number>
+  expire(key: RedisKey, seconds: number): Promise<number>
+  incr(key: RedisKey): Promise<number>
+  exists(key: RedisKey): Promise<number>
+  del(key: RedisKey): Promise<number>
   ping(): Promise<string>
   quit(): Promise<'OK' | void>
 }
@@ -26,24 +30,34 @@ class InMemoryRedisClient implements RedisClient {
 
   constructor(private readonly keyPrefix: string) {}
 
-  async get(key: string): Promise<string | null> {
+  async get(key: RedisKey): Promise<string | null> {
     const entry = this.getEntry(key)
     return entry ? entry.value : null
   }
 
-  async set(key: string, value: string, ...args: Array<string | number>): Promise<any> {
+  async set(key: RedisKey, value: RedisValue, ...args: any[]): Promise<any> {
     let requiresNx = false
     let expiresAt: number | null = null
     for (let i = 0; i < args.length; i += 1) {
-      const token = String(args[i]).toUpperCase()
-      if (token === 'NX') {
+      const arg = args[i]
+      if (typeof arg === 'function') {
+        continue
+      }
+      const token = Buffer.isBuffer(arg) ? arg.toString() : String(arg)
+      const normalized = token.toUpperCase()
+      if (normalized === 'NX') {
         requiresNx = true
         continue
       }
-      if (token === 'EX') {
+      if (normalized === 'EX') {
         const secondsValue = args[i + 1]
         const seconds =
-          typeof secondsValue === 'number' ? secondsValue : parseInt(String(secondsValue), 10)
+          typeof secondsValue === 'number'
+            ? secondsValue
+            : parseInt(
+                Buffer.isBuffer(secondsValue) ? secondsValue.toString() : String(secondsValue),
+                10
+              )
         if (Number.isFinite(seconds) && seconds > 0) {
           expiresAt = Date.now() + seconds * 1000
         }
@@ -58,27 +72,27 @@ class InMemoryRedisClient implements RedisClient {
       }
     }
 
-    this.store.set(this.fullKey(key), { value, expiresAt })
+    this.store.set(this.fullKey(key), { value: this.normalizeValue(value), expiresAt })
     return 'OK'
   }
 
-  async setex(key: string, seconds: number, value: string): Promise<'OK'> {
+  async setex(key: RedisKey, seconds: number, value: RedisValue): Promise<'OK'> {
     const expiresAt = seconds > 0 ? Date.now() + seconds * 1000 : null
-    this.store.set(this.fullKey(key), { value, expiresAt })
+    this.store.set(this.fullKey(key), { value: this.normalizeValue(value), expiresAt })
     return 'OK'
   }
 
-  async setnx(key: string, value: string): Promise<number> {
+  async setnx(key: RedisKey, value: RedisValue): Promise<number> {
     const fullKey = this.fullKey(key)
     const entry = this.store.get(fullKey)
     if (entry && (entry.expiresAt === null || entry.expiresAt > Date.now())) {
       return 0
     }
-    this.store.set(fullKey, { value, expiresAt: null })
+    this.store.set(fullKey, { value: this.normalizeValue(value), expiresAt: null })
     return 1
   }
 
-  async expire(key: string, seconds: number): Promise<number> {
+  async expire(key: RedisKey, seconds: number): Promise<number> {
     const fullKey = this.fullKey(key)
     const entry = this.store.get(fullKey)
     if (!entry) return 0
@@ -87,7 +101,7 @@ class InMemoryRedisClient implements RedisClient {
     return 1
   }
 
-  async incr(key: string): Promise<number> {
+  async incr(key: RedisKey): Promise<number> {
     const fullKey = this.fullKey(key)
     const entry = this.getEntry(key)
     const current = entry ? parseInt(entry.value, 10) : 0
@@ -97,11 +111,11 @@ class InMemoryRedisClient implements RedisClient {
     return next
   }
 
-  async exists(key: string): Promise<number> {
+  async exists(key: RedisKey): Promise<number> {
     return this.getEntry(key) ? 1 : 0
   }
 
-  async del(key: string): Promise<number> {
+  async del(key: RedisKey): Promise<number> {
     const fullKey = this.fullKey(key)
     const existed = this.store.delete(fullKey)
     return existed ? 1 : 0
@@ -116,11 +130,11 @@ class InMemoryRedisClient implements RedisClient {
     return 'OK'
   }
 
-  private fullKey(key: string): string {
-    return `${this.keyPrefix}${key}`
+  private fullKey(key: RedisKey): string {
+    return `${this.keyPrefix}${this.normalizeKey(key)}`
   }
 
-  private getEntry(key: string): Entry | null {
+  private getEntry(key: RedisKey): Entry | null {
     const fullKey = this.fullKey(key)
     const entry = this.store.get(fullKey)
     if (!entry) return null
@@ -129,6 +143,14 @@ class InMemoryRedisClient implements RedisClient {
       return null
     }
     return entry
+  }
+
+  private normalizeKey(key: RedisKey): string {
+    return Buffer.isBuffer(key) ? key.toString() : key
+  }
+
+  private normalizeValue(value: RedisValue): string {
+    return Buffer.isBuffer(value) ? value.toString() : String(value)
   }
 }
 
@@ -139,35 +161,35 @@ class ResilientRedisClient implements RedisClient {
     private readonly logger: Logger
   ) {}
 
-  get(key: string): Promise<string | null> {
+  get(key: RedisKey): Promise<string | null> {
     return this.execute(() => this.client.get(key))
   }
 
-  set(key: string, value: string, ...args: Array<string | number>): Promise<any> {
+  set(key: RedisKey, value: RedisValue, ...args: any[]): Promise<any> {
     return this.execute(() => this.client.set(key, value, ...args))
   }
 
-  setex(key: string, seconds: number, value: string): Promise<'OK'> {
+  setex(key: RedisKey, seconds: number, value: RedisValue): Promise<'OK'> {
     return this.execute(() => this.client.setex(key, seconds, value))
   }
 
-  setnx(key: string, value: string): Promise<number> {
+  setnx(key: RedisKey, value: RedisValue): Promise<number> {
     return this.execute(() => this.client.setnx(key, value))
   }
 
-  expire(key: string, seconds: number): Promise<number> {
+  expire(key: RedisKey, seconds: number): Promise<number> {
     return this.execute(() => this.client.expire(key, seconds))
   }
 
-  incr(key: string): Promise<number> {
+  incr(key: RedisKey): Promise<number> {
     return this.execute(() => this.client.incr(key))
   }
 
-  exists(key: string): Promise<number> {
+  exists(key: RedisKey): Promise<number> {
     return this.execute(() => this.client.exists(key))
   }
 
-  del(key: string): Promise<number> {
+  del(key: RedisKey): Promise<number> {
     return this.execute(() => this.client.del(key))
   }
 
