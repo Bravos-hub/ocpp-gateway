@@ -93,8 +93,11 @@ Key: `chargers:{chargePointId}`
   "tenantId": "tenant-abc",
   "status": "active",
   "allowedProtocols": ["1.6J", "2.0.1", "2.1"],
+  "allowedIps": ["10.0.0.10"],
+  "allowedCidrs": ["10.0.0.0/24"],
   "auth": {
     "type": "mtls",
+    "allowedTypes": ["mtls"],
     "certificates": [
       {
         "fingerprint": "AA:BB:CC:DD:EE",
@@ -112,6 +115,11 @@ Auth modes:
 - `token`: `Authorization: Bearer <token>` or `x-api-key: <token>`
 - `mtls`: charger certificate subject/fingerprint must match the identity record
 
+IP allowlists:
+- Global allowlist: `OCPP_ALLOWED_IPS`, `OCPP_ALLOWED_CIDRS`.
+- Per-charger allowlist: `allowedIps`, `allowedCidrs` on the identity record.
+- Set `OCPP_TRUST_PROXY=true` to honor `X-Forwarded-For` when behind a proxy.
+
 Certificate rotation:
 - Add multiple `certificates` entries with overlapping `validFrom`/`validTo` windows.
 
@@ -124,6 +132,8 @@ Provisioning audit:
 - Use `npm run provision:charger <identity.json>` and `npm run revoke:cert <fingerprint>` to write identities and revocations.
 - Each write emits an audit event to `cpms.audit.events` with actor metadata.
   - Set `PROVISION_ACTOR_ID`, `PROVISION_ACTOR_TYPE`, `PROVISION_ACTOR_IP`, `PROVISION_REASON`.
+  - Optional provisioning helpers: `PROVISION_ALLOWED_PROTOCOLS`, `PROVISION_AUTH_TYPE`, `PROVISION_SECRET`,
+    `PROVISION_SECRET_SALT`, `PROVISION_TOKEN` (generates salted hashes when missing in the JSON).
 
 ## TLS / mTLS settings
 

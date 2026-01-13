@@ -1,0 +1,17 @@
+{
+  "chargePointId": "CP-TEST-002",
+  "stationId": "ST-TEST-002",
+  "tenantId": "TENANT-DEV",
+  "status": "active",
+  "allowedProtocols": ["2.0.1"],
+  "auth": {
+    "type": "mtls",
+    "certificates": [
+      {
+        "fingerprint": "F0:2B:5C:8B:B1:D8:78:6C:AA:46:42:E8:A5:15:6A:6E:29:5B:62:DC:04:18:CB:E1:7E:87:C6:79:40:52:83:51",
+        "status": "active",
+        "chargePointId": "CP-TEST-002"
+      }
+    ]
+  }
+}

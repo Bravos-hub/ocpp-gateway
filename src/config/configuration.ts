@@ -1,3 +1,11 @@
+const parseList = (value?: string): string[] => {
+  if (!value) return []
+  return value
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+}
+
 export default () => {
   const isProd = (process.env.NODE_ENV || '').toLowerCase() === 'production'
 
@@ -35,6 +43,9 @@ export default () => {
       revokedPrefix: process.env.OCPP_REVOKED_PREFIX || 'revoked-certs',
       requireCertBinding: (process.env.OCPP_REQUIRE_CERT_BINDING ?? 'true') === 'true',
       allowPlaintextSecrets: (process.env.OCPP_ALLOW_PLAINTEXT_SECRETS ?? 'false') === 'true',
+      trustProxy: (process.env.OCPP_TRUST_PROXY ?? 'false') === 'true',
+      allowedIps: parseList(process.env.OCPP_ALLOWED_IPS),
+      allowedCidrs: parseList(process.env.OCPP_ALLOWED_CIDRS),
       allowBasic:
         (process.env.OCPP_AUTH_ALLOW_BASIC ?? (isProd ? 'false' : 'true')) === 'true',
       requireAllowedProtocols:

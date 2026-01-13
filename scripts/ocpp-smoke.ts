@@ -1,4 +1,6 @@
-import { WebSocket } from 'ws'
+import 'dotenv/config'
+import { readFileSync } from 'fs'
+import { WebSocket, type ClientOptions } from 'ws'
 import { randomUUID } from 'crypto'
 
 type Pending = {
@@ -16,7 +18,8 @@ class OcppTestClient {
     protocol: string,
     headers?: Record<string, string>
   ) {
-    this.ws = new WebSocket(url, protocol, { headers })
+    const options = buildClientOptions(url, headers)
+    this.ws = new WebSocket(url, protocol, options)
   }
 
   async connect(): Promise<void> {
@@ -64,6 +67,31 @@ class OcppTestClient {
       this.ws.send(JSON.stringify(message))
     })
   }
+}
+
+function buildClientOptions(url: string, headers?: Record<string, string>): ClientOptions {
+  const options: ClientOptions = headers ? { headers } : {}
+  if (!url.startsWith('wss://')) {
+    return options
+  }
+
+  const certPath = process.env.OCPP_CLIENT_CERT_PATH
+  const keyPath = process.env.OCPP_CLIENT_KEY_PATH
+  const caPath = process.env.OCPP_CLIENT_CA_PATH
+  if (certPath && keyPath) {
+    options.cert = readFileSync(certPath)
+    options.key = readFileSync(keyPath)
+  }
+  if (caPath) {
+    options.ca = readFileSync(caPath)
+  }
+
+  const rejectUnauthorized = process.env.OCPP_CLIENT_REJECT_UNAUTHORIZED
+  if (rejectUnauthorized) {
+    options.rejectUnauthorized = rejectUnauthorized !== 'false'
+  }
+
+  return options
 }
 
 function assert(condition: boolean, message: string) {

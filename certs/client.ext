@@ -1,0 +1,4 @@
+authorityKeyIdentifier=keyid,issuer
+basicConstraints=CA:FALSE
+keyUsage=critical, digitalSignature, keyEncipherment
+extendedKeyUsage=clientAuth

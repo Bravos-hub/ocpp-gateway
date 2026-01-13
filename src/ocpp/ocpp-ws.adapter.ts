@@ -11,6 +11,7 @@ export class OcppWsAdapter extends WsAdapter {
     port: number,
     httpServer: http.Server = this.createServer()
   ): http.Server {
+    this.assertTlsRequirement(httpServer)
     if (this.httpServersRegistry.has(port)) {
       return this.httpServersRegistry.get(port) as http.Server
     }
@@ -151,5 +152,14 @@ export class OcppWsAdapter extends WsAdapter {
     if (explicit === 'true') return true
     if (explicit === 'false') return false
     return (process.env.NODE_ENV || '').toLowerCase() === 'production'
+  }
+
+  private assertTlsRequirement(server: http.Server): void {
+    const tlsEnabled = (process.env.OCPP_TLS_ENABLED ?? 'false') === 'true'
+    const tlsRequired = this.isTlsRequired()
+    const isTlsServer = server instanceof https.Server
+    if ((tlsRequired || tlsEnabled) && !isTlsServer) {
+      throw new Error('TLS is required; provide an HTTPS server to NestFactory')
+    }
   }
 }

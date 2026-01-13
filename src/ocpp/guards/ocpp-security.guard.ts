@@ -38,7 +38,7 @@ export class OcppSecurityGuard implements CanActivate {
     
     if (!request) return false
     
-    const ip = this.getClientIp(request)
+    const ip = this.identity.getClientIp(request)
     const path = request.url?.toLowerCase() || ''
     
     const isSuspicious = this.suspiciousPatterns.some(p => p.test(path))
@@ -114,10 +114,4 @@ export class OcppSecurityGuard implements CanActivate {
     }
   }
 
-  private getClientIp(req: any): string {
-    return req.headers['x-forwarded-for']?.split(',')[0]?.trim() || 
-           req.connection?.remoteAddress || 
-           req.socket?.remoteAddress || 
-           'unknown'
-  }
 }

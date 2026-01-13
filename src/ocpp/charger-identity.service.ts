@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { createHash, timingSafeEqual } from 'crypto'
 import { IncomingMessage } from 'http'
+import { isIP } from 'net'
 import { RedisService } from '../redis/redis.service'
 
 export type ChargerIdentityAuthType = 'basic' | 'token' | 'mtls'
@@ -16,6 +17,7 @@ type ExtractedCertInfo = {
 
 export type ChargerIdentityAuth = {
   type?: ChargerIdentityAuthType
+  allowedTypes?: ChargerIdentityAuthType[]
   username?: string
   secretHash?: string
   secretSalt?: string
@@ -45,6 +47,8 @@ export type ChargerIdentity = {
   tenantId: string
   status?: 'active' | 'disabled'
   allowedProtocols?: string[]
+  allowedIps?: string[]
+  allowedCidrs?: string[]
   auth?: ChargerIdentityAuth
 }
 
@@ -61,6 +65,9 @@ export class ChargerIdentityService {
   private readonly minSecretHashLength: number
   private readonly minSaltLength: number
   private readonly allowPlaintextSecrets: boolean
+  private readonly trustProxy: boolean
+  private readonly globalAllowedIps: string[]
+  private readonly globalAllowedCidrs: string[]
 
   constructor(
     private readonly redis: RedisService,
@@ -76,6 +83,9 @@ export class ChargerIdentityService {
     this.requireSecretSalt = this.config.get<boolean>('auth.requireSecretSalt') ?? true
     this.minSecretHashLength = this.config.get<number>('auth.minSecretHashLength') || 64
     this.minSaltLength = this.config.get<number>('auth.minSaltLength') || 8
+    this.trustProxy = this.config.get<boolean>('auth.trustProxy') ?? false
+    this.globalAllowedIps = this.normalizeList(this.config.get<string[]>('auth.allowedIps'))
+    this.globalAllowedCidrs = this.normalizeList(this.config.get<string[]>('auth.allowedCidrs'))
     const allowPlaintextSecrets = this.config.get<boolean>('auth.allowPlaintextSecrets') ?? false
     if (allowPlaintextSecrets) {
       this.logger.warn('Plaintext secrets are disabled and will be ignored')
@@ -109,7 +119,17 @@ export class ChargerIdentityService {
       }
     }
 
-    const authMode = (identity.auth?.type || this.defaultAuthMode) as ChargerIdentityAuthType
+    const clientIp = this.extractClientIp(request)
+    if (!this.isIpAllowed(clientIp, identity)) {
+      const ipLabel = clientIp || 'unknown'
+      this.logger.warn(`IP ${ipLabel} not allowed for ${identity.chargePointId}`)
+      return null
+    }
+
+    const authMode = this.resolveAuthMode(identity)
+    if (!authMode) {
+      return null
+    }
     switch (authMode) {
       case 'basic':
         return this.verifyBasic(request, identity) ? identity : null
@@ -120,6 +140,10 @@ export class ChargerIdentityService {
       default:
         return null
     }
+  }
+
+  getClientIp(request: IncomingMessage): string {
+    return this.extractClientIp(request) || 'unknown'
   }
 
   async getIdentity(chargePointId: string): Promise<ChargerIdentity | null> {
@@ -374,6 +398,219 @@ export class ChargerIdentityService {
       .map((value) => this.normalizeAllowedProtocol(value))
       .filter((value): value is string => Boolean(value))
     return Array.from(new Set(normalized))
+  }
+
+  private resolveAuthMode(identity: ChargerIdentity): ChargerIdentityAuthType | null {
+    const rawMode = identity.auth?.type || this.defaultAuthMode
+    const authMode = this.normalizeAuthType(rawMode)
+    if (!authMode) {
+      this.logger.warn(`Unsupported auth mode for ${identity.chargePointId}`)
+      return null
+    }
+
+    const allowedRaw = identity.auth?.allowedTypes
+    const allowed = this.normalizeAuthTypes(allowedRaw)
+    if (allowedRaw && allowed.length === 0) {
+      this.logger.warn(`Invalid allowedTypes for ${identity.chargePointId}`)
+      return null
+    }
+    if (allowed.length > 0 && !allowed.includes(authMode)) {
+      this.logger.warn(`Auth mode ${authMode} not allowed for ${identity.chargePointId}`)
+      return null
+    }
+
+    return authMode
+  }
+
+  private normalizeAuthTypes(values?: ChargerIdentityAuthType[]): ChargerIdentityAuthType[] {
+    if (!values || values.length === 0) return []
+    const normalized = values
+      .map((value) => this.normalizeAuthType(value))
+      .filter((value): value is ChargerIdentityAuthType => Boolean(value))
+    return Array.from(new Set(normalized))
+  }
+
+  private normalizeAuthType(value?: string): ChargerIdentityAuthType | null {
+    if (!value || typeof value !== 'string') return null
+    const normalized = value.toLowerCase()
+    if (normalized === 'basic' || normalized === 'token' || normalized === 'mtls') {
+      return normalized as ChargerIdentityAuthType
+    }
+    return null
+  }
+
+  private extractClientIp(request: IncomingMessage): string | null {
+    const forwarded = this.trustProxy ? this.extractForwardedFor(request) : null
+    const direct =
+      request.socket?.remoteAddress ||
+      (request as any).connection?.remoteAddress ||
+      (request as any).connection?.socket?.remoteAddress ||
+      null
+    const candidate = forwarded || direct
+    return this.normalizeIp(candidate)
+  }
+
+  private extractForwardedFor(request: IncomingMessage): string | null {
+    const header = request.headers['x-forwarded-for']
+    if (typeof header === 'string' && header.trim()) {
+      return header.split(',')[0].trim()
+    }
+    if (Array.isArray(header) && header.length > 0) {
+      return header[0].split(',')[0].trim()
+    }
+    const forwarded = request.headers['forwarded']
+    if (typeof forwarded === 'string') {
+      const match = forwarded.split(',')[0].match(/for=([^;]+)/i)
+      if (match) {
+        return match[1].trim().replace(/^"|"$/g, '')
+      }
+    }
+    return null
+  }
+
+  private normalizeIp(value: string | null): string | null {
+    if (!value) return null
+    let ip = value.trim()
+    if (!ip) return null
+
+    if (ip.startsWith('[')) {
+      const end = ip.indexOf(']')
+      if (end > 0) {
+        ip = ip.slice(1, end)
+      }
+    }
+
+    const zoneIndex = ip.indexOf('%')
+    if (zoneIndex >= 0) {
+      ip = ip.slice(0, zoneIndex)
+    }
+
+    if (ip.includes('.') && ip.lastIndexOf(':') > ip.lastIndexOf('.')) {
+      ip = ip.slice(0, ip.lastIndexOf(':'))
+    }
+
+    if (ip.startsWith('::ffff:')) {
+      ip = ip.slice(7)
+    }
+
+    return isIP(ip) ? ip : null
+  }
+
+  private isIpAllowed(ip: string | null, identity: ChargerIdentity): boolean {
+    const globalIps = this.globalAllowedIps
+    const globalCidrs = this.globalAllowedCidrs
+    const identityIps = this.normalizeList(identity.allowedIps)
+    const identityCidrs = this.normalizeList(identity.allowedCidrs)
+    const hasGlobal = globalIps.length > 0 || globalCidrs.length > 0
+    const hasIdentity = identityIps.length > 0 || identityCidrs.length > 0
+
+    if (!hasGlobal && !hasIdentity) {
+      return true
+    }
+    if (!ip) {
+      return false
+    }
+
+    if (hasGlobal && !this.isIpInAllowlist(ip, globalIps, globalCidrs)) {
+      return false
+    }
+    if (hasIdentity && !this.isIpInAllowlist(ip, identityIps, identityCidrs)) {
+      return false
+    }
+
+    return true
+  }
+
+  private isIpInAllowlist(ip: string, ips: string[], cidrs: string[]): boolean {
+    const normalizedIp = this.normalizeIp(ip)
+    if (!normalizedIp) return false
+
+    const normalizedIps = ips
+      .map((entry) => this.normalizeIp(entry))
+      .filter((entry): entry is string => Boolean(entry))
+    if (normalizedIps.includes(normalizedIp)) {
+      return true
+    }
+
+    return this.isIpInCidrs(normalizedIp, cidrs)
+  }
+
+  private isIpInCidrs(ip: string, cidrs: string[]): boolean {
+    if (cidrs.length === 0) return false
+    const ipVersion = isIP(ip)
+    for (const entry of cidrs) {
+      const trimmed = entry.trim()
+      if (!trimmed) continue
+      const [rangeRaw, prefixRaw] = trimmed.split('/')
+      if (!rangeRaw || prefixRaw === undefined) continue
+      const range = this.normalizeIp(rangeRaw)
+      if (!range) continue
+
+      const rangeVersion = isIP(range)
+      if (rangeVersion !== ipVersion) continue
+
+      const prefix = parseInt(prefixRaw, 10)
+      if (Number.isNaN(prefix)) continue
+
+      if (rangeVersion === 4) {
+        if (prefix < 0 || prefix > 32) continue
+        const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0
+        const ipInt = this.ipv4ToInt(ip)
+        const rangeInt = this.ipv4ToInt(range)
+        if ((ipInt & mask) === (rangeInt & mask)) {
+          return true
+        }
+      } else if (rangeVersion === 6) {
+        if (prefix < 0 || prefix > 128) continue
+        const ipInt = this.ipv6ToBigInt(ip)
+        const rangeInt = this.ipv6ToBigInt(range)
+        if (ipInt === null || rangeInt === null) continue
+
+        const all = (1n << 128n) - 1n
+        const shift = BigInt(128 - prefix)
+        const mask = prefix === 0 ? 0n : (all << shift) & all
+        if ((ipInt & mask) === (rangeInt & mask)) {
+          return true
+        }
+      }
+    }
+
+    return false
+  }
+
+  private ipv4ToInt(ip: string): number {
+    return ip
+      .split('.')
+      .map((value) => parseInt(value, 10))
+      .reduce((acc, value) => ((acc << 8) + value) >>> 0, 0)
+  }
+
+  private ipv6ToBigInt(ip: string): bigint | null {
+    const parts = ip.split('::')
+    if (parts.length > 2) return null
+
+    const head = parts[0] ? parts[0].split(':').filter(Boolean) : []
+    const tail = parts[1] ? parts[1].split(':').filter(Boolean) : []
+    const missing = parts.length === 2 ? 8 - (head.length + tail.length) : 0
+    if (missing < 0) return null
+
+    const hextets = parts.length === 2 ? [...head, ...Array(missing).fill('0'), ...tail] : head
+    if (hextets.length !== 8) return null
+
+    let result = 0n
+    for (const hextet of hextets) {
+      const value = parseInt(hextet, 16)
+      if (Number.isNaN(value) || value < 0 || value > 0xffff) {
+        return null
+      }
+      result = (result << 16n) + BigInt(value)
+    }
+    return result
+  }
+
+  private normalizeList(values?: string[]): string[] {
+    if (!values || values.length === 0) return []
+    return values.map((entry) => entry.trim()).filter(Boolean)
   }
 
   private normalizeAllowedProtocol(value: string): string | null {
