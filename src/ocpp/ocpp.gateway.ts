@@ -206,7 +206,7 @@ export class OcppGateway implements OnGatewayConnection, OnGatewayDisconnect {
           })
         }
         if (envelope && envelope.messageTypeId === 2) {
-          const cached = this.responseCache.get(meta, envelope.uniqueId)
+          const cached = await this.responseCache.get(meta, envelope.uniqueId)
           if (cached) {
             client.send(JSON.stringify(cached))
             this.metrics.increment('ocpp_outbound_total')

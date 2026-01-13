@@ -78,7 +78,7 @@ export class OcppService {
 
     // At this point only CALL messages remain.
 
-    const cached = this.responseCache.get(context, envelope.uniqueId)
+    const cached = await this.responseCache.get(context, envelope.uniqueId)
     if (cached) {
       return cached
     }
@@ -107,7 +107,7 @@ export class OcppService {
         direction: 'inbound',
         action: envelope.action,
       })
-      this.responseCache.set(context, envelope.uniqueId, error)
+      await this.responseCache.set(context, envelope.uniqueId, error)
       return error
     }
 
@@ -134,7 +134,7 @@ export class OcppService {
         direction: 'inbound',
         action: envelope.action,
       })
-      this.responseCache.set(context, envelope.uniqueId, error)
+      await this.responseCache.set(context, envelope.uniqueId, error)
       return error
     }
 
@@ -157,7 +157,7 @@ export class OcppService {
         result.error.description,
         result.error.details || {}
       )
-      this.responseCache.set(context, envelope.uniqueId, error)
+      await this.responseCache.set(context, envelope.uniqueId, error)
       return error
     }
 
@@ -185,7 +185,7 @@ export class OcppService {
         direction: 'inbound',
         action: envelope.action,
       })
-      this.responseCache.set(context, envelope.uniqueId, error)
+      await this.responseCache.set(context, envelope.uniqueId, error)
       return error
     }
 
@@ -217,12 +217,12 @@ export class OcppService {
         direction: 'inbound',
         action: envelope.action,
       })
-      this.responseCache.set(context, envelope.uniqueId, error)
+      await this.responseCache.set(context, envelope.uniqueId, error)
       return error
     }
 
     const callResult = buildCallResult(envelope.uniqueId, responsePayload)
-    this.responseCache.set(context, envelope.uniqueId, callResult)
+    await this.responseCache.set(context, envelope.uniqueId, callResult)
     return callResult
   }
 }

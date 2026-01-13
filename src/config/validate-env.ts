@@ -9,6 +9,7 @@ export function validateEnvOrThrow(env: NodeJS.ProcessEnv = process.env): void {
   readInt(env, 'PORT', 3001, { min: 1, max: 65535 }, issues)
 
   const kafkaEnabled = (env.KAFKA_ENABLED ?? 'true') !== 'false'
+  const requireKafka = readBool(env, 'REQUIRE_KAFKA', false, issues)
   const brokers = parseList(env.KAFKA_BROKERS ?? 'localhost:9092')
   if (kafkaEnabled) {
     if (brokers.length === 0) {
@@ -21,6 +22,9 @@ export function validateEnvOrThrow(env: NodeJS.ProcessEnv = process.env): void {
         }
       })
     }
+  }
+  if (requireKafka && !kafkaEnabled) {
+    issues.push('REQUIRE_KAFKA cannot be true when KAFKA_ENABLED is false')
   }
   readInt(env, 'KAFKA_RETRY_MAX_RETRIES', 5, { min: 0 }, issues)
   const kafkaInitialRetry = readInt(env, 'KAFKA_RETRY_INITIAL_MS', 300, { min: 0 }, issues)
@@ -36,6 +40,7 @@ export function validateEnvOrThrow(env: NodeJS.ProcessEnv = process.env): void {
   }
 
   const redisEnabled = (env.REDIS_ENABLED ?? 'true') !== 'false'
+  const requireRedis = readBool(env, 'REQUIRE_REDIS', false, issues)
   const redisUrl = env.REDIS_URL ?? 'redis://localhost:6379'
   if (redisEnabled) {
     if (!redisUrl) {
@@ -43,6 +48,9 @@ export function validateEnvOrThrow(env: NodeJS.ProcessEnv = process.env): void {
     } else if (!/^rediss?:\/\//i.test(redisUrl)) {
       issues.push('REDIS_URL must start with redis:// or rediss://')
     }
+  }
+  if (requireRedis && !redisEnabled) {
+    issues.push('REQUIRE_REDIS cannot be true when REDIS_ENABLED is false')
   }
   readInt(env, 'REDIS_RETRY_MAX_ATTEMPTS', 20, { min: 0 }, issues)
   const redisInitialDelay = readInt(env, 'REDIS_RETRY_INITIAL_DELAY_MS', 200, { min: 0 }, issues)
@@ -110,6 +118,8 @@ export function validateEnvOrThrow(env: NodeJS.ProcessEnv = process.env): void {
   readInt(env, 'OCPP_TLS_CRL_RELOAD_SECONDS', 0, { min: 0 }, issues)
 
   readInt(env, 'OCPP_MAX_PAYLOAD_BYTES', 262144, { min: 0 }, issues)
+  readInt(env, 'OCPP_RESPONSE_CACHE_TTL_SECONDS', 300, { min: 0 }, issues)
+  readBool(env, 'OCPP_RESPONSE_CACHE_REDIS', true, issues)
   readInt(env, 'OCPP_PENDING_MESSAGE_LIMIT', 100, { min: 0 }, issues)
 
   const windowSeconds = readInt(env, 'OCPP_RATE_LIMIT_WINDOW_SECONDS', 60, { min: 0 }, issues)
@@ -211,6 +221,27 @@ function readFloat(
     issues.push(`${key} must be <= ${bounds.max}`)
   }
   return parsed
+}
+
+function readBool(
+  env: NodeJS.ProcessEnv,
+  key: string,
+  fallback: boolean,
+  issues: string[]
+): boolean {
+  const raw = env[key]
+  if (raw !== undefined && raw.trim() === '') {
+    issues.push(`${key} must not be empty`)
+    return fallback
+  }
+  if (raw === undefined) {
+    return fallback
+  }
+  const normalized = raw.trim().toLowerCase()
+  if (normalized === 'true') return true
+  if (normalized === 'false') return false
+  issues.push(`${key} must be true or false`)
+  return fallback
 }
 
 function parseList(value?: string): string[] {

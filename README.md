@@ -65,6 +65,8 @@ Subprotocols are required and must match the version:
 ## Rate limits and payload size
 
 - `OCPP_MAX_PAYLOAD_BYTES` rejects oversized frames (0 disables).
+- `OCPP_RESPONSE_CACHE_TTL_SECONDS` caches inbound CALL responses (0 disables).
+- `OCPP_RESPONSE_CACHE_REDIS=true` persists response cache in Redis for replay protection.
 - `OCPP_PENDING_MESSAGE_LIMIT` caps queued frames before auth/session setup (0 disables).
 - `OCPP_RATE_LIMIT_WINDOW_SECONDS` sets the counting window.
 - `OCPP_RATE_LIMIT_PER_CP` and `OCPP_RATE_LIMIT_GLOBAL` apply to `MeterValues` and `StatusNotification`.
@@ -75,6 +77,8 @@ Subprotocols are required and must match the version:
 - `METRICS_RATE_WINDOW_SECONDS` controls the rolling rate window.
 - Set `METRICS_ALERT_RATE_LIMITED_PER_SEC`, `METRICS_ALERT_AUTH_FAILURES_PER_SEC`,
   `METRICS_ALERT_ERROR_PER_SEC` to emit alert entries in `/metrics`.
+- Set `HEALTH_METRICS_AUTH_TOKEN` to require `Authorization: Bearer <token>` (or `x-health-token`)
+  for `/health` and `/metrics`.
 
 ## Command audit persistence
 
@@ -82,6 +86,10 @@ Subprotocols are required and must match the version:
 - `COMMAND_AUDIT_TTL_SECONDS` controls how long audit entries are retained.
 - `COMMAND_IDEMPOTENCY_TTL_SECONDS` controls how long `commandId` values are deduped
   (duplicates emit `CommandDuplicate` events).
+
+## Readiness gating
+
+- Set `REQUIRE_KAFKA=true` and/or `REQUIRE_REDIS=true` to fail fast on boot if dependencies are down.
 
 ## Resilience tuning
 

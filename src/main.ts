@@ -6,10 +6,12 @@ import * as fs from 'fs'
 import type { SecureVersion } from 'tls'
 import { AppModule } from './app.module'
 import { validateEnvOrThrow } from './config/validate-env'
+import { KafkaService } from './kafka/kafka.service'
 import { JsonLogger } from './logging/json-logger.service'
 import { LogContextService } from './logging/log-context.service'
 import { MetricsService } from './metrics/metrics.service'
 import { OcppWsAdapter } from './ocpp/ocpp-ws.adapter'
+import { RedisService } from './redis/redis.service'
 
 async function bootstrap() {
   validateEnvOrThrow()
@@ -18,6 +20,8 @@ async function bootstrap() {
   app.useWebSocketAdapter(new OcppWsAdapter(app))
   app.useGlobalPipes(new ValidationPipe({ transform: true, whitelist: true }))
   app.get(MetricsService).setGauge('ocpp_connections_active', 0)
+
+  await enforceRequiredDependencies(app)
 
   const port = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001
   await app.listen(port)
@@ -71,4 +75,31 @@ function resolveMinVersion(value?: string): SecureVersion {
   if (!value) return 'TLSv1.2'
   if (value === 'TLSv1.3') return 'TLSv1.3'
   return 'TLSv1.2'
+}
+
+async function enforceRequiredDependencies(app: { get<T>(type: new (...args: any[]) => T): T }) {
+  const requireKafka = (process.env.REQUIRE_KAFKA ?? 'false') === 'true'
+  const requireRedis = (process.env.REQUIRE_REDIS ?? 'false') === 'true'
+  if (!requireKafka && !requireRedis) {
+    return
+  }
+
+  const kafka = app.get(KafkaService)
+  const redis = app.get(RedisService)
+  const [kafkaStatus, redisStatus] = await Promise.all([
+    kafka.checkConnection(),
+    redis.checkConnection(),
+  ])
+
+  const failures: string[] = []
+  if (requireKafka && kafkaStatus.status !== 'up') {
+    failures.push(`kafka=${kafkaStatus.status}`)
+  }
+  if (requireRedis && redisStatus.status !== 'up') {
+    failures.push(`redis=${redisStatus.status}`)
+  }
+
+  if (failures.length > 0) {
+    throw new Error(`Required dependencies unavailable: ${failures.join(', ')}`)
+  }
 }
