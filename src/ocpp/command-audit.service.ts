@@ -57,7 +57,7 @@ export class CommandAuditService {
         action,
         chargePointId: command.chargePointId || context.chargePointId,
         stationId: command.stationId || context.stationId,
-      tenantId: context.tenantId,
+        tenantId: context.tenantId,
         connectorId: command.connectorId,
         ocppVersion: command.ocppVersion || context.ocppVersion,
         nodeId: this.nodeId,

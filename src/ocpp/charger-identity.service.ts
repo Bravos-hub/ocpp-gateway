@@ -3,10 +3,13 @@ import { ConfigService } from '@nestjs/config'
 import { createHash, scryptSync, timingSafeEqual } from 'crypto'
 import { IncomingMessage } from 'http'
 import { isIP } from 'net'
+import { MetricsService } from '../metrics/metrics.service'
 import { RedisService } from '../redis/redis.service'
 
 export type ChargerIdentityAuthType = 'basic' | 'token' | 'mtls'
 type HashAlgorithm = 'sha256' | 'scrypt'
+type AuthCheckResult = { ok: true } | { ok: false; reason: string }
+type AuthModeResolution = { mode: ChargerIdentityAuthType } | { mode: null; reason: string }
 
 type ExtractedCertInfo = {
   fingerprint: string
@@ -75,7 +78,8 @@ export class ChargerIdentityService {
 
   constructor(
     private readonly redis: RedisService,
-    private readonly config: ConfigService
+    private readonly config: ConfigService,
+    private readonly metrics: MetricsService
   ) {
     const isProd = (process.env.NODE_ENV || '').toLowerCase() === 'production'
     this.keyPrefix = this.config.get<string>('auth.identityPrefix') || 'chargers'
@@ -112,21 +116,25 @@ export class ChargerIdentityService {
   ): Promise<ChargerIdentity | null> {
     const identity = await this.getIdentity(chargePointId)
     if (!identity) {
+      this.recordAuthFailure('identity_missing')
       return null
     }
 
     if (identity.status && identity.status !== 'active') {
+      this.recordAuthFailure('status_inactive')
       return null
     }
 
     const allowed = this.normalizeAllowedProtocols(identity.allowedProtocols)
     if (this.requireAllowedProtocols && allowed.length === 0) {
       this.logger.warn(`Missing allowedProtocols for ${identity.chargePointId}`)
+      this.recordAuthFailure('allowed_protocols_missing')
       return null
     }
     if (allowed.length > 0) {
       const normalized = this.normalizeVersion(ocppVersion)
       if (!allowed.includes(normalized)) {
+        this.recordAuthFailure('protocol_not_allowed')
         return null
       }
     }
@@ -135,20 +143,27 @@ export class ChargerIdentityService {
     if (!this.isIpAllowed(clientIp, identity)) {
       const ipLabel = clientIp || 'unknown'
       this.logger.warn(`IP ${ipLabel} not allowed for ${identity.chargePointId}`)
+      this.recordAuthFailure('ip_not_allowed')
       return null
     }
 
-    const authMode = this.resolveAuthMode(identity)
-    if (!authMode) {
+    const authModeResolution = this.resolveAuthMode(identity)
+    if (!authModeResolution.mode) {
+      this.recordAuthFailure(authModeResolution.reason)
       return null
     }
+    const authMode = authModeResolution.mode
     switch (authMode) {
       case 'basic':
-        return this.verifyBasic(request, identity) ? identity : null
+        return this.handleAuthResult(authMode, identity, this.verifyBasic(request, identity))
       case 'token':
-        return this.verifyToken(request, identity) ? identity : null
+        return this.handleAuthResult(authMode, identity, this.verifyToken(request, identity))
       case 'mtls':
-        return (await this.verifyMtls(request, identity)) ? identity : null
+        return this.handleAuthResult(
+          authMode,
+          identity,
+          await this.verifyMtls(request, identity)
+        )
       default:
         return null
     }
@@ -183,32 +198,34 @@ export class ChargerIdentityService {
     return { ...parsed, chargePointId }
   }
 
-  private verifyBasic(request: IncomingMessage, identity: ChargerIdentity): boolean {
-    if (!this.validateBasicConfig(identity)) {
-      return false
+  private verifyBasic(request: IncomingMessage, identity: ChargerIdentity): AuthCheckResult {
+    const configCheck = this.validateBasicConfig(identity)
+    if (!configCheck.ok) {
+      return configCheck
     }
     const header = request.headers['authorization'] || ''
     if (typeof header !== 'string' || !header.startsWith('Basic ')) {
-      return false
+      return { ok: false, reason: 'basic_missing_header' }
     }
 
     const decoded = Buffer.from(header.slice(6), 'base64').toString('utf8')
     const separator = decoded.indexOf(':')
-    if (separator < 0) return false
+    if (separator < 0) return { ok: false, reason: 'basic_invalid_format' }
 
     const username = decoded.slice(0, separator)
     const password = decoded.slice(separator + 1)
     const expectedUsername = identity.auth?.username || identity.chargePointId
     if (username !== expectedUsername) {
-      return false
+      return { ok: false, reason: 'basic_user_mismatch' }
     }
 
     return this.verifySecret(password, identity)
   }
 
-  private verifyToken(request: IncomingMessage, identity: ChargerIdentity): boolean {
-    if (!this.validateTokenConfig(identity)) {
-      return false
+  private verifyToken(request: IncomingMessage, identity: ChargerIdentity): AuthCheckResult {
+    const configCheck = this.validateTokenConfig(identity)
+    if (!configCheck.ok) {
+      return configCheck
     }
     const header = request.headers['authorization']
     const apiKey = request.headers['x-api-key']
@@ -220,66 +237,73 @@ export class ChargerIdentityService {
       token = apiKey
     }
 
-    if (!token) return false
+    if (!token) return { ok: false, reason: 'token_missing' }
     return this.verifyTokenValue(token, identity)
   }
 
-  private async verifyMtls(request: IncomingMessage, identity: ChargerIdentity): Promise<boolean> {
+  private async verifyMtls(
+    request: IncomingMessage,
+    identity: ChargerIdentity
+  ): Promise<AuthCheckResult> {
     const socket: any = request.socket
     if (!socket || typeof socket.getPeerCertificate !== 'function') {
-      return false
+      return { ok: false, reason: 'mtls_missing_cert' }
     }
 
     if (!socket.encrypted || !socket.authorized) {
-      return false
+      return { ok: false, reason: 'mtls_not_authorized' }
     }
 
     const cert = socket.getPeerCertificate(true)
-    if (!cert) return false
+    if (!cert) return { ok: false, reason: 'mtls_missing_cert' }
 
     const certInfo = this.extractCertInfo(cert)
     if (!certInfo.fingerprint) {
-      return false
+      return { ok: false, reason: 'mtls_missing_fingerprint' }
     }
     if (certInfo.expired) {
-      return false
+      return { ok: false, reason: 'mtls_expired' }
     }
 
     if (await this.isRevokedFingerprint(certInfo.fingerprint, identity)) {
-      return false
+      return { ok: false, reason: 'mtls_revoked' }
     }
 
     const bindings = this.resolveBindings(identity)
     if (bindings.length === 0 && this.requireExplicitCertBinding) {
       this.logger.warn(`No cert bindings configured for ${identity.chargePointId}`)
-      return false
+      return { ok: false, reason: 'mtls_binding_missing' }
     }
 
     if (bindings.length === 0) {
       return this.matchesFallback(certInfo, identity)
+        ? { ok: true }
+        : { ok: false, reason: 'mtls_binding_mismatch' }
     }
 
     return this.matchesBinding(certInfo, bindings, identity.chargePointId)
+      ? { ok: true }
+      : { ok: false, reason: 'mtls_binding_mismatch' }
   }
 
-  private verifySecret(password: string, identity: ChargerIdentity): boolean {
+  private verifySecret(password: string, identity: ChargerIdentity): AuthCheckResult {
     const auth = identity.auth || {}
     const resolved = this.resolveHash(auth.secretHash, auth.hashAlgorithm)
     if (!resolved) {
-      return false
+      return { ok: false, reason: 'basic_hash_missing' }
     }
     const hash = this.hashSecret(password, auth.secretSalt, resolved.algorithm)
-    return this.safeEqual(hash, resolved.hash)
+    return this.safeEqual(hash, resolved.hash) ? { ok: true } : { ok: false, reason: 'basic_invalid' }
   }
 
-  private verifyTokenValue(token: string, identity: ChargerIdentity): boolean {
+  private verifyTokenValue(token: string, identity: ChargerIdentity): AuthCheckResult {
     const auth = identity.auth || {}
     const resolved = this.resolveHash(auth.tokenHash, auth.hashAlgorithm)
     if (!resolved) {
-      return false
+      return { ok: false, reason: 'token_hash_missing' }
     }
     const hash = this.hashSecret(token, auth.secretSalt, resolved.algorithm)
-    return this.safeEqual(hash, resolved.hash)
+    return this.safeEqual(hash, resolved.hash) ? { ok: true } : { ok: false, reason: 'token_invalid' }
   }
 
   private resolveBindings(identity: ChargerIdentity): ChargerCertificateBinding[] {
@@ -411,26 +435,26 @@ export class ChargerIdentityService {
     return Array.from(new Set(normalized))
   }
 
-  private resolveAuthMode(identity: ChargerIdentity): ChargerIdentityAuthType | null {
+  private resolveAuthMode(identity: ChargerIdentity): AuthModeResolution {
     const rawMode = identity.auth?.type || this.defaultAuthMode
     const authMode = this.normalizeAuthType(rawMode)
     if (!authMode) {
       this.logger.warn(`Unsupported auth mode for ${identity.chargePointId}`)
-      return null
+      return { mode: null, reason: 'auth_mode_invalid' }
     }
 
     const allowedRaw = identity.auth?.allowedTypes
     const allowed = this.normalizeAuthTypes(allowedRaw)
     if (allowedRaw && allowed.length === 0) {
       this.logger.warn(`Invalid allowedTypes for ${identity.chargePointId}`)
-      return null
+      return { mode: null, reason: 'auth_mode_invalid' }
     }
     if (allowed.length > 0 && !allowed.includes(authMode)) {
       this.logger.warn(`Auth mode ${authMode} not allowed for ${identity.chargePointId}`)
-      return null
+      return { mode: null, reason: 'auth_mode_not_allowed' }
     }
 
-    return authMode
+    return { mode: authMode }
   }
 
   private normalizeAuthTypes(values?: ChargerIdentityAuthType[]): ChargerIdentityAuthType[] {
@@ -640,34 +664,62 @@ export class ChargerIdentityService {
     return null
   }
 
-  private validateBasicConfig(identity: ChargerIdentity): boolean {
+  private validateBasicConfig(identity: ChargerIdentity): AuthCheckResult {
     if (!this.allowBasicAuth) {
       this.logger.warn(`Basic auth disabled for ${identity.chargePointId}`)
-      return false
+      return { ok: false, reason: 'basic_disabled' }
     }
     const auth = identity.auth || {}
     if (!auth.secretHash || !this.isHashStrong(auth.secretHash)) {
       this.logger.warn(`Basic auth requires a strong secretHash for ${identity.chargePointId}`)
-      return false
+      return { ok: false, reason: 'basic_hash_missing' }
     }
     if (this.requireSecretSalt && !this.isSaltStrong(auth.secretSalt)) {
       this.logger.warn(`Basic auth requires secretSalt for ${identity.chargePointId}`)
-      return false
+      return { ok: false, reason: 'basic_salt_missing' }
     }
-    return true
+    return { ok: true }
   }
 
-  private validateTokenConfig(identity: ChargerIdentity): boolean {
+  private validateTokenConfig(identity: ChargerIdentity): AuthCheckResult {
     const auth = identity.auth || {}
     if (!auth.tokenHash || !this.isHashStrong(auth.tokenHash)) {
       this.logger.warn(`Token auth requires a strong tokenHash for ${identity.chargePointId}`)
-      return false
+      return { ok: false, reason: 'token_hash_missing' }
     }
     if (this.requireSecretSalt && !this.isSaltStrong(auth.secretSalt)) {
       this.logger.warn(`Token auth requires secretSalt for ${identity.chargePointId}`)
-      return false
+      return { ok: false, reason: 'token_salt_missing' }
     }
-    return true
+    return { ok: true }
+  }
+
+  private handleAuthResult(
+    mode: ChargerIdentityAuthType,
+    identity: ChargerIdentity,
+    result: AuthCheckResult
+  ): ChargerIdentity | null {
+    if (result.ok) {
+      this.recordAuthSuccess(mode)
+      return identity
+    }
+    this.recordAuthFailure(result.reason, mode)
+    return null
+  }
+
+  private recordAuthFailure(reason: string, mode?: ChargerIdentityAuthType): void {
+    const labels: Record<string, string> = { reason }
+    if (mode) {
+      labels.mode = mode
+    }
+    this.metrics.increment('ocpp_auth_failures_total', labels)
+    this.metrics.observeRate('ocpp_auth_failures_rate_per_sec', labels)
+  }
+
+  private recordAuthSuccess(mode: ChargerIdentityAuthType): void {
+    const labels = { mode }
+    this.metrics.increment('ocpp_auth_success_total', labels)
+    this.metrics.observeRate('ocpp_auth_success_rate_per_sec', labels)
   }
 
   private resolveHash(

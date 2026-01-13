@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { Consumer, Kafka, Producer } from 'kafkajs'
+import { CircuitBreaker, CircuitOpenError } from '../resilience/circuit-breaker'
 
 @Injectable()
 export class KafkaService implements OnModuleDestroy {
@@ -11,6 +12,7 @@ export class KafkaService implements OnModuleDestroy {
   private readonly logger = new Logger(KafkaService.name)
   private warnedDisabled = false
   private readonly defaultGroupId: string
+  private readonly breaker: CircuitBreaker
 
   constructor(private readonly config: ConfigService) {
     const brokers = this.config.get<string[]>('kafka.brokers') || []
@@ -18,7 +20,31 @@ export class KafkaService implements OnModuleDestroy {
     this.defaultGroupId = this.config.get<string>('kafka.groupId') || 'ocpp-gateway'
     const enabled = this.config.get<boolean>('kafka.enabled')
     this.enabled = enabled ?? brokers.length > 0
-    this.kafka = this.enabled ? new Kafka({ clientId, brokers }) : null
+    const failureThreshold = parseInt(process.env.KAFKA_CIRCUIT_FAILURE_THRESHOLD || '5', 10)
+    const openSeconds = parseInt(process.env.KAFKA_CIRCUIT_OPEN_SECONDS || '15', 10)
+    const halfOpenSuccesses = parseInt(process.env.KAFKA_CIRCUIT_HALF_OPEN_SUCCESS || '2', 10)
+    this.breaker = new CircuitBreaker({
+      failureThreshold: Number.isFinite(failureThreshold) ? failureThreshold : 5,
+      openDurationMs: Math.max(1, openSeconds) * 1000,
+      halfOpenSuccesses: Number.isFinite(halfOpenSuccesses) ? halfOpenSuccesses : 2,
+    })
+    const retry = {
+      retries: parseInt(process.env.KAFKA_RETRY_MAX_RETRIES || '5', 10),
+      initialRetryTime: parseInt(process.env.KAFKA_RETRY_INITIAL_MS || '300', 10),
+      maxRetryTime: parseInt(process.env.KAFKA_RETRY_MAX_MS || '30000', 10),
+      factor: parseFloat(process.env.KAFKA_RETRY_FACTOR || '0.2'),
+    }
+    const connectionTimeout = parseInt(process.env.KAFKA_CONNECTION_TIMEOUT_MS || '10000', 10)
+    const requestTimeout = parseInt(process.env.KAFKA_REQUEST_TIMEOUT_MS || '30000', 10)
+    this.kafka = this.enabled
+      ? new Kafka({
+          clientId,
+          brokers,
+          retry,
+          connectionTimeout,
+          requestTimeout,
+        })
+      : null
   }
 
   isEnabled(): boolean {
@@ -27,12 +53,14 @@ export class KafkaService implements OnModuleDestroy {
 
   async getProducer(): Promise<Producer> {
     const kafka = this.getKafkaClient()
-    if (!this.producer) {
-      this.producer = kafka.producer()
-      await this.producer.connect()
-      this.logger.log('Kafka producer connected')
-    }
-    return this.producer
+    return this.executeWithBreaker(async () => {
+      if (!this.producer) {
+        this.producer = kafka.producer()
+        await this.producer.connect()
+        this.logger.log('Kafka producer connected')
+      }
+      return this.producer
+    })
   }
 
   async getConsumer(groupId?: string): Promise<Consumer> {
@@ -55,8 +83,16 @@ export class KafkaService implements OnModuleDestroy {
       this.logDisabledOnce()
       return
     }
-    const producer = await this.getProducer()
-    await producer.send({ topic, messages: [{ key, value: message }] })
+    try {
+      const producer = await this.getProducer()
+      await producer.send({ topic, messages: [{ key, value: message }] })
+    } catch (error) {
+      if (error instanceof CircuitOpenError) {
+        this.logger.warn(`Kafka circuit open; skipping publish to ${topic}`)
+        return
+      }
+      throw error
+    }
   }
 
   async checkConnection(): Promise<{ status: 'up' | 'down' | 'disabled'; error?: string }> {
@@ -93,6 +129,17 @@ export class KafkaService implements OnModuleDestroy {
       throw new Error('Kafka is disabled')
     }
     return this.kafka
+  }
+
+  private async executeWithBreaker<T>(fn: () => Promise<T>): Promise<T> {
+    try {
+      return await this.breaker.execute(fn)
+    } catch (error) {
+      if (error instanceof CircuitOpenError) {
+        this.logger.warn('Kafka circuit open; skipping broker interaction')
+      }
+      throw error
+    }
   }
 
   private logDisabledOnce(): void {

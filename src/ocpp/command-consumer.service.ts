@@ -5,8 +5,10 @@ import { KafkaService } from '../kafka/kafka.service'
 import { KAFKA_TOPICS, commandRequestsForNode } from '../contracts/kafka-topics'
 import { CommandRequest } from '../contracts/commands'
 import { DomainEvent } from '../contracts/events'
+import { MetricsService } from '../metrics/metrics.service'
 import { ConnectionManager } from './connection-manager.service'
 import { OcppCommandDispatcher } from './command-dispatcher.service'
+import { CommandIdempotencyService } from './command-idempotency.service'
 import { SessionDirectoryService } from './session-directory.service'
 import { NodeDirectoryService } from './node-directory.service'
 
@@ -22,7 +24,9 @@ export class CommandConsumerService implements OnModuleInit, OnModuleDestroy {
     private readonly dispatcher: OcppCommandDispatcher,
     private readonly sessions: SessionDirectoryService,
     private readonly nodes: NodeDirectoryService,
-    private readonly config: ConfigService
+    private readonly config: ConfigService,
+    private readonly idempotency: CommandIdempotencyService,
+    private readonly metrics: MetricsService
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -79,6 +83,15 @@ export class CommandConsumerService implements OnModuleInit, OnModuleDestroy {
         return
       }
       await this.routeToOwner(command, ownerNodeId)
+      return
+    }
+
+    const claimed = await this.idempotency.claim(command.commandId)
+    if (!claimed) {
+      this.logger.warn(`Duplicate command ${command.commandId} ignored`)
+      this.metrics.increment('ocpp_command_duplicates_total')
+      this.metrics.observeRate('ocpp_command_duplicates_rate_per_sec')
+      await this.publishCommandEvent(command, 'CommandDuplicate', 'Duplicate commandId')
       return
     }
 

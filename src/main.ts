@@ -1,14 +1,20 @@
+import 'dotenv/config'
 import { ValidationPipe } from '@nestjs/common'
 import { NestFactory } from '@nestjs/core'
 import { constants } from 'crypto'
 import * as fs from 'fs'
 import type { SecureVersion } from 'tls'
 import { AppModule } from './app.module'
+import { validateEnvOrThrow } from './config/validate-env'
+import { JsonLogger } from './logging/json-logger.service'
+import { LogContextService } from './logging/log-context.service'
 import { MetricsService } from './metrics/metrics.service'
 import { OcppWsAdapter } from './ocpp/ocpp-ws.adapter'
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule, buildHttpsOptions())
+  validateEnvOrThrow()
+  const logger = new JsonLogger(new LogContextService())
+  const app = await NestFactory.create(AppModule, { ...buildHttpsOptions(), logger })
   app.useWebSocketAdapter(new OcppWsAdapter(app))
   app.useGlobalPipes(new ValidationPipe({ transform: true, whitelist: true }))
   app.get(MetricsService).setGauge('ocpp_connections_active', 0)

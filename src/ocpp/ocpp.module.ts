@@ -23,6 +23,7 @@ import { NodeDirectoryService } from './node-directory.service'
 import { SessionControlPublisher } from './session-control-publisher.service'
 import { SessionControlConsumerService } from './session-control-consumer.service'
 import { CommandAuditService } from './command-audit.service'
+import { CommandIdempotencyService } from './command-idempotency.service'
 
 @Module({
   imports: [KafkaModule, RedisModule],
@@ -49,6 +50,7 @@ import { CommandAuditService } from './command-audit.service'
     SessionControlPublisher,
     SessionControlConsumerService,
     CommandAuditService,
+    CommandIdempotencyService,
   ],
 })
 export class OcppModule {}

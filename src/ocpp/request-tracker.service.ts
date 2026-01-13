@@ -47,6 +47,10 @@ export class OcppRequestTracker {
           direction: 'outbound',
           action,
         })
+        this.metrics.observeRate('ocpp_timeouts_rate_per_sec', {
+          direction: 'outbound',
+          action,
+        })
         reject(new Error('timeout'))
       }, timeoutMs)
 
@@ -92,6 +96,12 @@ export class OcppRequestTracker {
       this.metrics.increment('ocpp_error_codes_total', {
         code: 'ResponseValidationFailed',
         direction: 'outbound',
+        action: pending.action,
+      })
+      this.metrics.observeRate('ocpp_error_rate_per_sec', {
+        code: 'ResponseValidationFailed',
+        direction: 'outbound',
+        action: pending.action,
       })
       pending.resolve({
         status: 'error',
@@ -122,7 +132,16 @@ export class OcppRequestTracker {
     if (pending.auditCommandId) {
       void this.audit.recordRejected(uniqueId, errorCode, errorDescription, errorDetails)
     }
-    this.metrics.increment('ocpp_error_codes_total', { code: errorCode, direction: 'outbound' })
+    this.metrics.increment('ocpp_error_codes_total', {
+      code: errorCode,
+      direction: 'outbound',
+      action: pending.action,
+    })
+    this.metrics.observeRate('ocpp_error_rate_per_sec', {
+      code: errorCode,
+      direction: 'outbound',
+      action: pending.action,
+    })
     pending.resolve({
       status: 'error',
       errorCode,

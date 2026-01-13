@@ -2,11 +2,13 @@ import { Injectable } from '@nestjs/common'
 import { WebSocket } from 'ws'
 
 export type ConnectionMeta = {
+  connectionId: string
   chargePointId: string
   ocppVersion: string
   stationId?: string
   tenantId?: string
   sessionEpoch?: number
+  ip?: string
 }
 
 @Injectable()

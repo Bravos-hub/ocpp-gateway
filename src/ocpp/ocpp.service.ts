@@ -51,6 +51,7 @@ export class OcppService {
           reason: 'envelope_invalid',
         })
         this.metrics.increment('ocpp_error_codes_total', { code, direction: 'inbound' })
+        this.metrics.observeRate('ocpp_error_rate_per_sec', { code, direction: 'inbound' })
         return buildCallError(parsed.error.uniqueId, code, parsed.error.reason, {
           reason: parsed.error.reason,
         })
@@ -96,7 +97,16 @@ export class OcppService {
         `Action ${envelope.action} not supported`,
         {}
       )
-      this.metrics.increment('ocpp_error_codes_total', { code: 'NotImplemented', direction: 'inbound' })
+      this.metrics.increment('ocpp_error_codes_total', {
+        code: 'NotImplemented',
+        direction: 'inbound',
+        action: envelope.action,
+      })
+      this.metrics.observeRate('ocpp_error_rate_per_sec', {
+        code: 'NotImplemented',
+        direction: 'inbound',
+        action: envelope.action,
+      })
       this.responseCache.set(context, envelope.uniqueId, error)
       return error
     }
@@ -114,7 +124,16 @@ export class OcppService {
       const error = buildCallError(envelope.uniqueId, code, 'Payload validation failed', {
         errors: validation.errors || [],
       })
-      this.metrics.increment('ocpp_error_codes_total', { code, direction: 'inbound' })
+      this.metrics.increment('ocpp_error_codes_total', {
+        code,
+        direction: 'inbound',
+        action: envelope.action,
+      })
+      this.metrics.observeRate('ocpp_error_rate_per_sec', {
+        code,
+        direction: 'inbound',
+        action: envelope.action,
+      })
       this.responseCache.set(context, envelope.uniqueId, error)
       return error
     }
@@ -125,6 +144,12 @@ export class OcppService {
       this.metrics.increment('ocpp_error_codes_total', {
         code: result.error.code,
         direction: 'inbound',
+        action: envelope.action,
+      })
+      this.metrics.observeRate('ocpp_error_rate_per_sec', {
+        code: result.error.code,
+        direction: 'inbound',
+        action: envelope.action,
       })
       const error = buildCallError(
         envelope.uniqueId,
@@ -150,7 +175,16 @@ export class OcppService {
         `No response schema for ${envelope.action}`,
         {}
       )
-      this.metrics.increment('ocpp_error_codes_total', { code: 'InternalError', direction: 'inbound' })
+      this.metrics.increment('ocpp_error_codes_total', {
+        code: 'InternalError',
+        direction: 'inbound',
+        action: envelope.action,
+      })
+      this.metrics.observeRate('ocpp_error_rate_per_sec', {
+        code: 'InternalError',
+        direction: 'inbound',
+        action: envelope.action,
+      })
       this.responseCache.set(context, envelope.uniqueId, error)
       return error
     }
@@ -173,7 +207,16 @@ export class OcppService {
       const error = buildCallError(envelope.uniqueId, 'InternalError', 'Response validation failed', {
         errors: responseValidation.errors || [],
       })
-      this.metrics.increment('ocpp_error_codes_total', { code: 'InternalError', direction: 'inbound' })
+      this.metrics.increment('ocpp_error_codes_total', {
+        code: 'InternalError',
+        direction: 'inbound',
+        action: envelope.action,
+      })
+      this.metrics.observeRate('ocpp_error_rate_per_sec', {
+        code: 'InternalError',
+        direction: 'inbound',
+        action: envelope.action,
+      })
       this.responseCache.set(context, envelope.uniqueId, error)
       return error
     }

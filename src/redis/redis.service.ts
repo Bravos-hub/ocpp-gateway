@@ -1,10 +1,11 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import Redis from 'ioredis'
+import { CircuitBreaker, CircuitOpenError } from '../resilience/circuit-breaker'
 
 type RedisClient = {
   get(key: string): Promise<string | null>
-  set(key: string, value: string): Promise<'OK'>
+  set(key: string, value: string, ...args: Array<string | number>): Promise<any>
   setex(key: string, seconds: number, value: string): Promise<'OK'>
   setnx(key: string, value: string): Promise<number>
   expire(key: string, seconds: number): Promise<number>
@@ -30,8 +31,34 @@ class InMemoryRedisClient implements RedisClient {
     return entry ? entry.value : null
   }
 
-  async set(key: string, value: string): Promise<'OK'> {
-    this.store.set(this.fullKey(key), { value, expiresAt: null })
+  async set(key: string, value: string, ...args: Array<string | number>): Promise<any> {
+    let requiresNx = false
+    let expiresAt: number | null = null
+    for (let i = 0; i < args.length; i += 1) {
+      const token = String(args[i]).toUpperCase()
+      if (token === 'NX') {
+        requiresNx = true
+        continue
+      }
+      if (token === 'EX') {
+        const secondsValue = args[i + 1]
+        const seconds =
+          typeof secondsValue === 'number' ? secondsValue : parseInt(String(secondsValue), 10)
+        if (Number.isFinite(seconds) && seconds > 0) {
+          expiresAt = Date.now() + seconds * 1000
+        }
+        i += 1
+      }
+    }
+
+    if (requiresNx) {
+      const existing = this.getEntry(key)
+      if (existing) {
+        return null
+      }
+    }
+
+    this.store.set(this.fullKey(key), { value, expiresAt })
     return 'OK'
   }
 
@@ -105,6 +132,65 @@ class InMemoryRedisClient implements RedisClient {
   }
 }
 
+class ResilientRedisClient implements RedisClient {
+  constructor(
+    private readonly client: RedisClient,
+    private readonly breaker: CircuitBreaker,
+    private readonly logger: Logger
+  ) {}
+
+  get(key: string): Promise<string | null> {
+    return this.execute(() => this.client.get(key))
+  }
+
+  set(key: string, value: string, ...args: Array<string | number>): Promise<any> {
+    return this.execute(() => this.client.set(key, value, ...args))
+  }
+
+  setex(key: string, seconds: number, value: string): Promise<'OK'> {
+    return this.execute(() => this.client.setex(key, seconds, value))
+  }
+
+  setnx(key: string, value: string): Promise<number> {
+    return this.execute(() => this.client.setnx(key, value))
+  }
+
+  expire(key: string, seconds: number): Promise<number> {
+    return this.execute(() => this.client.expire(key, seconds))
+  }
+
+  incr(key: string): Promise<number> {
+    return this.execute(() => this.client.incr(key))
+  }
+
+  exists(key: string): Promise<number> {
+    return this.execute(() => this.client.exists(key))
+  }
+
+  del(key: string): Promise<number> {
+    return this.execute(() => this.client.del(key))
+  }
+
+  ping(): Promise<string> {
+    return this.execute(() => this.client.ping())
+  }
+
+  quit(): Promise<'OK' | void> {
+    return this.client.quit()
+  }
+
+  private async execute<T>(fn: () => Promise<T>): Promise<T> {
+    try {
+      return await this.breaker.execute(fn)
+    } catch (error) {
+      if (error instanceof CircuitOpenError) {
+        this.logger.warn('Redis circuit open; skipping command')
+      }
+      throw error
+    }
+  }
+}
+
 @Injectable()
 export class RedisService implements OnModuleDestroy {
   private readonly client: RedisClient
@@ -119,9 +205,33 @@ export class RedisService implements OnModuleDestroy {
     const prefix = keyPrefix ? `${keyPrefix}:` : ''
 
     if (enabled) {
-      const client = new Redis(url, { keyPrefix: prefix })
+      const maxAttempts = parseInt(process.env.REDIS_RETRY_MAX_ATTEMPTS || '20', 10)
+      const initialDelay = parseInt(process.env.REDIS_RETRY_INITIAL_DELAY_MS || '200', 10)
+      const maxDelay = parseInt(process.env.REDIS_RETRY_MAX_DELAY_MS || '2000', 10)
+      const connectTimeout = parseInt(process.env.REDIS_CONNECT_TIMEOUT_MS || '10000', 10)
+      const maxRetriesPerRequest = parseInt(process.env.REDIS_MAX_RETRIES_PER_REQUEST || '20', 10)
+      const client = new Redis(url, {
+        keyPrefix: prefix,
+        connectTimeout,
+        maxRetriesPerRequest,
+        retryStrategy: (times) => {
+          if (times > maxAttempts) {
+            return null
+          }
+          const delay = Math.min(initialDelay * Math.pow(2, times - 1), maxDelay)
+          return delay
+        },
+      })
       client.on('error', (err) => this.logger.error(`Redis error: ${err.message}`))
-      this.client = client
+      const failureThreshold = parseInt(process.env.REDIS_CIRCUIT_FAILURE_THRESHOLD || '5', 10)
+      const openSeconds = parseInt(process.env.REDIS_CIRCUIT_OPEN_SECONDS || '15', 10)
+      const halfOpenSuccesses = parseInt(process.env.REDIS_CIRCUIT_HALF_OPEN_SUCCESS || '2', 10)
+      const breaker = new CircuitBreaker({
+        failureThreshold: Number.isFinite(failureThreshold) ? failureThreshold : 5,
+        openDurationMs: Math.max(1, openSeconds) * 1000,
+        halfOpenSuccesses: Number.isFinite(halfOpenSuccesses) ? halfOpenSuccesses : 2,
+      })
+      this.client = new ResilientRedisClient(client, breaker, this.logger)
     } else {
       this.logger.warn('Redis disabled; using in-memory store')
       this.client = new InMemoryRedisClient(prefix)

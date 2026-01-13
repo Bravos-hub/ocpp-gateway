@@ -1,6 +1,8 @@
 import { CanActivate, ExecutionContext, Injectable, Logger } from '@nestjs/common'
+import { randomUUID } from 'crypto'
 import { RedisService } from '../../redis/redis.service'
 import { ChargerIdentityService } from '../charger-identity.service'
+import { LogContextService } from '../../logging/log-context.service'
 
 @Injectable()
 export class OcppSecurityGuard implements CanActivate {
@@ -25,7 +27,8 @@ export class OcppSecurityGuard implements CanActivate {
 
   constructor(
     private readonly redis: RedisService,
-    private readonly identity: ChargerIdentityService
+    private readonly identity: ChargerIdentityService,
+    private readonly logContext: LogContextService
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -37,34 +40,50 @@ export class OcppSecurityGuard implements CanActivate {
       args.find((arg: any) => arg && typeof arg === 'object' && arg.headers && arg.url)
     
     if (!request) return false
-    
+
     const ip = this.identity.getClientIp(request)
     const path = request.url?.toLowerCase() || ''
-    
-    const isSuspicious = this.suspiciousPatterns.some(p => p.test(path))
-    const isInvalid = !this.validCpPathRegex.test(path)
-    
-    if (isSuspicious || isInvalid) {
-      await this.logSuspiciousActivity(ip, path, request)
-      return false
-    }
-
     const parsed = this.parsePath(request.url || '')
-    if (!parsed) {
-      await this.logSuspiciousActivity(ip, path, request)
-      return false
-    }
+    const correlationId = randomUUID()
 
-    const identity = await this.identity.authenticate(request, parsed.chargePointId, parsed.ocppVersion)
-    if (!identity) {
-      await this.logUnauthorized(ip, parsed.chargePointId)
-      return false
-    }
+    return this.logContext.runWithContext(
+      {
+        correlationId,
+        ip,
+        path,
+        chargePointId: parsed?.chargePointId,
+        ocppVersion: parsed?.ocppVersion,
+      },
+      async () => {
+        const isSuspicious = this.suspiciousPatterns.some((p) => p.test(path))
+        const isInvalid = !this.validCpPathRegex.test(path)
 
-    const wsClient = client as any
-    wsClient.ocppIdentity = identity
-    wsClient.ocppVersion = parsed.ocppVersion
-    return true
+        if (isSuspicious || isInvalid) {
+          await this.logSuspiciousActivity(ip, path, request)
+          return false
+        }
+
+        if (!parsed) {
+          await this.logSuspiciousActivity(ip, path, request)
+          return false
+        }
+
+        const identity = await this.identity.authenticate(
+          request,
+          parsed.chargePointId,
+          parsed.ocppVersion
+        )
+        if (!identity) {
+          await this.logUnauthorized(ip, parsed.chargePointId)
+          return false
+        }
+
+        const wsClient = client as any
+        wsClient.ocppIdentity = identity
+        wsClient.ocppVersion = parsed.ocppVersion
+        return true
+      }
+    )
   }
 
   private async logSuspiciousActivity(ip: string, path: string, req: any) {

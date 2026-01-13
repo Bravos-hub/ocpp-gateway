@@ -17,6 +17,7 @@ type RateRecord = {
 @Injectable()
 export class MetricsService {
   private readonly windowSeconds: number
+  private readonly alertThresholds: Record<string, number>
   private readonly counters = new Map<string, MetricRecord>()
   private readonly gauges = new Map<string, MetricRecord>()
   private readonly rates = new Map<string, RateRecord>()
@@ -24,6 +25,15 @@ export class MetricsService {
   constructor() {
     const parsed = parseInt(process.env.METRICS_RATE_WINDOW_SECONDS || '60', 10)
     this.windowSeconds = Number.isFinite(parsed) && parsed > 0 ? parsed : 60
+    this.alertThresholds = {
+      ocpp_rate_limited_rate_per_sec: parseFloat(
+        process.env.METRICS_ALERT_RATE_LIMITED_PER_SEC || '0'
+      ),
+      ocpp_auth_failures_rate_per_sec: parseFloat(
+        process.env.METRICS_ALERT_AUTH_FAILURES_PER_SEC || '0'
+      ),
+      ocpp_error_rate_per_sec: parseFloat(process.env.METRICS_ALERT_ERROR_PER_SEC || '0'),
+    }
   }
 
   increment(name: string, labels: MetricLabels = {}, value = 1): void {
@@ -71,12 +81,24 @@ export class MetricsService {
         windowSeconds: this.windowSeconds,
       }
     })
+    const alerts = rates
+      .filter((record) => {
+        const threshold = this.alertThresholds[record.name] || 0
+        return threshold > 0 && record.value >= threshold
+      })
+      .map((record) => ({
+        name: record.name,
+        labels: record.labels,
+        value: record.value,
+        threshold: this.alertThresholds[record.name],
+      }))
 
     return {
       timestamp: new Date().toISOString(),
       counters,
       gauges,
       rates,
+      alerts,
     }
   }
 

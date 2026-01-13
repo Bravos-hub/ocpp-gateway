@@ -65,13 +65,35 @@ Subprotocols are required and must match the version:
 ## Rate limits and payload size
 
 - `OCPP_MAX_PAYLOAD_BYTES` rejects oversized frames (0 disables).
+- `OCPP_PENDING_MESSAGE_LIMIT` caps queued frames before auth/session setup (0 disables).
 - `OCPP_RATE_LIMIT_WINDOW_SECONDS` sets the counting window.
 - `OCPP_RATE_LIMIT_PER_CP` and `OCPP_RATE_LIMIT_GLOBAL` apply to `MeterValues` and `StatusNotification`.
+
+## Metrics
+
+- `GET /metrics` returns JSON counters, gauges, rates, and optional alerts.
+- `METRICS_RATE_WINDOW_SECONDS` controls the rolling rate window.
+- Set `METRICS_ALERT_RATE_LIMITED_PER_SEC`, `METRICS_ALERT_AUTH_FAILURES_PER_SEC`,
+  `METRICS_ALERT_ERROR_PER_SEC` to emit alert entries in `/metrics`.
 
 ## Command audit persistence
 
 - Outbound CALLs are stored in Redis with their `uniqueId`, payload, and response payload/error.
 - `COMMAND_AUDIT_TTL_SECONDS` controls how long audit entries are retained.
+- `COMMAND_IDEMPOTENCY_TTL_SECONDS` controls how long `commandId` values are deduped
+  (duplicates emit `CommandDuplicate` events).
+
+## Resilience tuning
+
+Kafka retry/circuit settings:
+- `KAFKA_RETRY_MAX_RETRIES`, `KAFKA_RETRY_INITIAL_MS`, `KAFKA_RETRY_MAX_MS`, `KAFKA_RETRY_FACTOR`
+- `KAFKA_CONNECTION_TIMEOUT_MS`, `KAFKA_REQUEST_TIMEOUT_MS`
+- `KAFKA_CIRCUIT_FAILURE_THRESHOLD`, `KAFKA_CIRCUIT_OPEN_SECONDS`, `KAFKA_CIRCUIT_HALF_OPEN_SUCCESS`
+
+Redis retry/circuit settings:
+- `REDIS_RETRY_MAX_ATTEMPTS`, `REDIS_RETRY_INITIAL_DELAY_MS`, `REDIS_RETRY_MAX_DELAY_MS`
+- `REDIS_CONNECT_TIMEOUT_MS`, `REDIS_MAX_RETRIES_PER_REQUEST`
+- `REDIS_CIRCUIT_FAILURE_THRESHOLD`, `REDIS_CIRCUIT_OPEN_SECONDS`, `REDIS_CIRCUIT_HALF_OPEN_SUCCESS`
 
 ## Multi-node routing
 
